@@ -22,3 +22,17 @@
 | `backend/tests/` | 测试用例                                |
 | `frontend/`      | 原生单页前端                            |
 | `infra/`         | 部署相关                                |
+
+## 接口
+
+| 方法 | 路径                | 说明                              | 成功状态码 |
+| ---- | ------------------- | --------------------------------- | ---------- |
+| GET  | `/health`           | 健康检查                          | 200        |
+| POST | `/works`            | 新增作品                          | 201        |
+| GET  | `/works`            | 作品列表，支持 `skip` / `limit` 分页 | 200        |
+| GET  | `/works/{work_id}`  | 查询单个作品                      | 200        |
+| POST | `/ask`              | 提问，当前返回固定假答案          | 200        |
+
+启动服务：`uv run uvicorn backend.app.main:app --reload`
+
+启动后访问 `/docs` 可查看交互式接口文档（FastAPI 自动生成）。
