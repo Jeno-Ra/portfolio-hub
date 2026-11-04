@@ -8,7 +8,7 @@
 | ----------- | ---------------------------------- |
 | 语言 / 依赖 | Python 3.12 + uv                   |
 | 后端        | FastAPI + Pydantic v2              |
-| 数据库      | SQLite                             |
+| 数据库      | SQLite + SQLAlchemy 2.x（ORM）     |
 | 向量检索    | Chroma                             |
 | 前端        | 原生 HTML + CSS + JS               |
 | 质量        | pytest + Ruff + GitHub Actions     |
@@ -31,7 +31,11 @@
 | POST | `/works`            | 新增作品                          | 201        |
 | GET  | `/works`            | 作品列表，支持 `skip` / `limit` 分页 | 200        |
 | GET  | `/works/{work_id}`  | 查询单个作品                      | 200        |
-| POST | `/ask`              | 提问，当前返回固定假答案          | 200        |
+| POST | `/ask`              | 提问：写入会话与消息，答案仍为固定假答案 | 200        |
+
+`/works` 返回的作品字段：`id` / `title` / `type` / `content` / `tags` / `created_at`。
+`tags` 传名字即可，服务端会自动建标签并在 `work_tags` 里建立关联。
+时间字段统一为 ISO 8601 的 UTC 形式（如 `2026-10-29T10:36:53Z`，带 `Z`），时区转换由客户端负责。
 
 启动服务：`uv run uvicorn backend.app.main:app --reload`
 
