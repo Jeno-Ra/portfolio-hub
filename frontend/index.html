@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PortfolioHub · 多模态作品集</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="topbar__title">PortfolioHub</h1>
+    <span class="topbar__hint">多模态作品集 · 本地版</span>
+  </header>
+
+  <main class="layout">
+    <!-- ===== 左栏：作品列表 ===== -->
+    <aside class="panel panel--list">
+      <div class="panel__head">
+        <h2 class="panel__title">作品</h2>
+        <button id="btn-new" type="button" class="btn btn--primary">+ 新增</button>
+      </div>
+
+      <!-- 按 type 筛选。data-type 与后端 works.type 取值一致 -->
+      <nav class="filters" id="filters">
+        <button type="button" class="chip chip--active" data-type="all">全部</button>
+        <button type="button" class="chip" data-type="video">视频</button>
+        <button type="button" class="chip" data-type="image">图片</button>
+        <button type="button" class="chip" data-type="text">文本</button>
+        <button type="button" class="chip" data-type="code">代码</button>
+        <button type="button" class="chip" data-type="project">项目</button>
+      </nav>
+
+      <!-- 列表由 app.js 渲染，每个 li 内含标题 / 类型 / 标签 / 编辑按钮 -->
+      <ul class="work-list" id="work-list"></ul>
+      <p class="empty" id="work-empty">还没有作品，点右上角「新增」开始。</p>
+    </aside>
+
+    <!-- ===== 右栏：对话区 ===== -->
+    <section class="panel panel--chat">
+      <div class="panel__head">
+        <h2 class="panel__title">对话</h2>
+      </div>
+
+      <div class="messages" id="messages"></div>
+
+      <form class="composer" id="composer">
+        <input
+          id="question"
+          type="text"
+          placeholder="试试：帮我找 9 月做的明长城分镜"
+          autocomplete="off"
+          maxlength="500"
+        >
+        <button type="submit" class="btn btn--primary">发送</button>
+      </form>
+    </section>
+  </main>
+
+  <!-- ===== 新增 / 编辑作品弹窗（同一套表单，靠 work-id 区分） ===== -->
+  <dialog class="modal" id="work-modal">
+    <form class="modal__body" id="work-form">
+      <h2 class="modal__title" id="modal-title">新增作品</h2>
+      <input type="hidden" id="work-id">
+
+      <label class="field">
+        <span class="field__label">标题</span>
+        <input id="work-title" type="text" required maxlength="120">
+      </label>
+
+      <label class="field">
+        <span class="field__label">类型</span>
+        <select id="work-type">
+          <option value="text">文本</option>
+          <option value="video">视频</option>
+          <option value="image">图片</option>
+          <option value="code">代码</option>
+          <option value="project">项目</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span class="field__label">内容</span>
+        <textarea id="work-content" rows="5"></textarea>
+      </label>
+
+      <label class="field">
+        <span class="field__label">标签</span>
+        <input id="work-tags" type="text" placeholder="用逗号分隔，如：明史, 分镜">
+      </label>
+
+      <div class="modal__actions">
+        <button type="button" class="btn" id="btn-cancel">取消</button>
+        <button type="submit" class="btn btn--primary" id="btn-save">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
