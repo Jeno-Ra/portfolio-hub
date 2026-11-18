@@ -87,10 +87,15 @@
         <textarea id="work-content" rows="5"></textarea>
       </label>
 
-      <!-- 只在「新增 + 类型=图片」时出现：交给后端调视觉模型生成描述 -->
-      <label class="field" id="field-image" hidden>
-        <span class="field__label">图片路径（会自动生成描述填入内容）</span>
-        <input id="work-image" type="text" placeholder="例如 F:\素材\角色立绘.png">
+      <!-- 新增时可用：填了文件路径就由后端解析（图片生成描述 / PDF 解析正文 / 视频只存元数据） -->
+      <label class="field" id="field-file" hidden>
+        <span class="field__label">文件路径（可选，会按类型自动解析）</span>
+        <input id="work-file" type="text" placeholder="例如 F:\素材\角色立绘.png 或 F:\素材\笔记.md">
+      </label>
+
+      <label class="field" id="field-cover" hidden>
+        <span class="field__label">视频封面路径（可选，会生成一句画面描述）</span>
+        <input id="work-cover" type="text" placeholder="例如 F:\素材\封面.png">
       </label>
 
       <label class="field">

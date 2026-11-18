@@ -14,11 +14,12 @@ from sqlalchemy.orm import Session
 from backend.app import crud, llm, vector_store
 from backend.app.database import get_db, init_db
 from backend.app.embedding import embed_text
+from backend.app.files import extract_text
 from backend.app.indexer import index_work
 from backend.app.schemas import (
     AskRequest,
     AskResponse,
-    ImageIngest,
+    IngestRequest,
     WorkCreate,
     WorkResponse,
     WorkUpdate,
@@ -75,29 +76,78 @@ def create_work(work: WorkCreate, db: Session = Depends(get_db)):
     return created
 
 
-@app.post("/works/image", response_model=WorkResponse, status_code=201)
-def create_work_from_image(payload: ImageIngest, db: Session = Depends(get_db)):
-    """图片录入：调视觉模型生成描述 -> 存成作品 -> 建索引，一步完成。
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv"}
+CODE_SUFFIXES = {
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".java",
+    ".cpp",
+    ".c",
+    ".go",
+    ".rs",
+    ".sql",
+    ".html",
+    ".css",
+    ".sh",
+}
 
-    只接受服务器本机可读的路径（本地演示够用；部署时改成上传接口）。
+
+def _infer_type(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix in IMAGE_SUFFIXES:
+        return "image"
+    if suffix in VIDEO_SUFFIXES:
+        return "video"
+    if suffix in CODE_SUFFIXES:
+        return "code"
+    return "text"
+
+
+@app.post("/works/ingest", response_model=WorkResponse, status_code=201)
+def ingest_work(payload: IngestRequest, db: Session = Depends(get_db)):
+    """统一录入入口：按类型决定「内容」从哪来。
+
+    图片 → 视觉模型生成描述
+    视频 → 只存元数据（手填 notes），给了封面则额外描述封面画面
+    PDF/文本/代码 → 解析正文
     """
+    path = Path(payload.path)
+    work_type = payload.type or _infer_type(path)
+    title = payload.title or path.stem
+    content = (payload.notes or "").strip()
+
     try:
-        description = describe_image(payload.image_path)
+        if work_type == "image":
+            content = describe_image(path)
+        elif work_type == "video":
+            # 规划里的边界：视频不做抽帧/转写，只记元数据
+            if payload.cover_path:
+                content = (
+                    f"{content}\n封面画面：{describe_image(payload.cover_path)}".strip()
+                )
+            if not content:
+                content = "（暂无描述）"
+        else:
+            content = extract_text(path)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:  # 视觉服务失败：明确告诉调用方，不要静默建空作品
-        raise HTTPException(status_code=502, detail=f"图片描述生成失败：{exc}") from exc
+    except ValueError as exc:
+        # 不支持的类型 / 扫描版 PDF / 解码失败，都是调用方的问题
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"文件解析失败：{exc}") from exc
 
-    title = payload.title or Path(payload.image_path).stem
     created = crud.create_work(
         db,
-        WorkCreate(
-            title=title,
-            type="image",
-            content=description,
-            tags=payload.tags,
-        ),
+        WorkCreate(title=title, type=work_type, content=content, tags=payload.tags),
     )
+    created.source_path = str(path)
+    db.commit()
+    db.refresh(created)
     index_work(db, created)
     return created
 

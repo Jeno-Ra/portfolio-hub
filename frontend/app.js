@@ -129,10 +129,12 @@ filtersEl.addEventListener("click", (event) => {
 });
 
 /* ---------- 新增 / 编辑弹窗 ---------- */
-function syncImageField() {
-  // 只有"新增 + 类型=图片"才显示路径输入；编辑时不重新生成描述
-  const show = !state.editingId && $("work-type").value === "image";
-  $("field-image").hidden = !show;
+function syncIngestFields() {
+  // 只有"新增"才显示文件路径；封面只在视频类型下出现
+  const creating = !state.editingId;
+  const isVideo = $("work-type").value === "video";
+  $("field-file").hidden = !creating;
+  $("field-cover").hidden = !creating || !isVideo;
 }
 
 function openModal(work = null) {
@@ -143,14 +145,15 @@ function openModal(work = null) {
   $("work-type").value = work ? work.type : "text";
   $("work-content").value = work ? work.content : "";
   $("work-tags").value = work ? (work.tags ?? []).join(", ") : "";
-  $("work-image").value = "";
-  syncImageField();
+  $("work-file").value = "";
+  $("work-cover").value = "";
+  syncIngestFields();
 
   modal.showModal();
   $("work-title").focus();
 }
 
-$("work-type").addEventListener("change", syncImageField);
+$("work-type").addEventListener("change", syncIngestFields);
 $("btn-new").addEventListener("click", () => openModal());
 $("btn-cancel").addEventListener("click", () => modal.close());
 
@@ -166,7 +169,8 @@ $("work-form").addEventListener("submit", async (event) => {
       .map((s) => s.trim())
       .filter(Boolean),
   };
-  const imagePath = $("work-image").value.trim();
+  const filePath = $("work-file").value.trim();
+  const coverPath = $("work-cover").value.trim();
 
   if (!payload.title) {
     toast("标题不能为空");
@@ -182,15 +186,18 @@ $("work-form").addEventListener("submit", async (event) => {
         method: "PATCH",
         body: JSON.stringify(payload),
       });
-    } else if (payload.type === "image" && imagePath) {
-      // 走图片录入：后端生成描述后再建作品，可能要几秒
-      saveBtn.textContent = "生成描述中…";
-      await api("/works/image", {
+    } else if (filePath) {
+      // 统一录入：后端按类型解析（图片生成描述 / PDF 读正文 / 视频只存元数据）
+      saveBtn.textContent = "解析中…";
+      await api("/works/ingest", {
         method: "POST",
         body: JSON.stringify({
-          image_path: imagePath,
+          path: filePath,
           title: payload.title,
+          type: payload.type,
           tags: payload.tags,
+          notes: payload.content,
+          cover_path: coverPath || null,
         }),
       });
     } else {

@@ -45,6 +45,7 @@ class WorkResponse(WorkCreate):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    source_path: str | None = None
     created_at: UtcDatetime
 
     @field_validator("tags", mode="before")
@@ -55,14 +56,25 @@ class WorkResponse(WorkCreate):
         return [getattr(tag, "name", tag) for tag in value or []]
 
 
-class ImageIngest(BaseModel):
-    """图片录入：给一个本机可读的图片路径，服务端生成描述后建作品"""
+class IngestRequest(BaseModel):
+    """从本地文件录入作品：图片 / 视频 / PDF / 文本 / 代码 都能走这一个入口。
 
-    image_path: str = Field(..., min_length=1, description="图片的绝对路径")
+    - 图片：调视觉模型生成描述，写进 content
+    - 视频：只存元数据（不做抽帧/转写），描述用手填的 notes；
+            给 cover_path 时会额外描述封面画面并拼进 content
+    - PDF/文本/代码：解析正文写进 content
+    """
+
+    path: str = Field(..., min_length=1, description="文件绝对路径")
     title: str | None = Field(
         default=None, max_length=120, description="留空则用文件名"
     )
+    type: str | None = Field(
+        default=None, description="video/image/text/code/project；留空按扩展名推断"
+    )
     tags: list[str] = Field(default_factory=list)
+    notes: str = Field(default="", description="手填描述（视频必填，其他可选）")
+    cover_path: str | None = Field(default=None, description="仅视频：封面图路径")
 
 
 class AskRequest(BaseModel):
