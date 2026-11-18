@@ -1,7 +1,7 @@
 from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.app import crud
+from backend.app import crud, llm
 from backend.app.database import get_db, init_db
 from backend.app.schemas import AskRequest, AskResponse, WorkCreate, WorkResponse
 
@@ -39,7 +39,7 @@ def ask(req: AskRequest, db: Session = Depends(get_db)):
     conversation = crud.create_conversation(db)
     crud.add_message(db, conversation.id, "user", req.question)
 
-    answer = f"(假答案)当前尚未接入检索，暂时无法回答：{req.question}"
+    answer = llm.chat(req.question)
     crud.add_message(db, conversation.id, "assistant", answer)
 
     return AskResponse(answer=answer, conversation_id=conversation.id)
