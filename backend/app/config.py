@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     deepseek_api_key: str
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
-    llm_timeout: int = 30
-    llm_total_budget: int = 45
+    llm_timeout: int = 5
+    llm_total_budget: int = 30
 
 
 settings = Settings()
