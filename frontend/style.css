@@ -219,16 +219,47 @@ body {
   opacity: 0.6;
 }
 
-/* 编辑按钮常驻但压低存在感，悬停卡片时提亮 */
-.work-card__edit {
+/* 卡片操作区常驻但压低存在感，悬停卡片时提亮 */
+.work-card__actions {
+  display: flex;
   flex: none;
+  gap: 4px;
   opacity: 0.45;
   transition: opacity 0.15s;
 }
 
-.work-card:hover .work-card__edit,
-.work-card__edit:focus-visible {
+.work-card:hover .work-card__actions,
+.work-card__actions:focus-within {
   opacity: 1;
+}
+
+/* ---------- 轻提示 ---------- */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  z-index: 10;
+  max-width: 80vw;
+  padding: 9px 16px;
+  border: 1px solid #3b2b2e;
+  border-radius: var(--radius);
+  background: #2a1c1f;
+  color: #ffb4b4;
+  font-size: 13px;
+  transform: translateX(-50%);
+  animation: toast-in 0.2s ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 /* ---------- 类型徽标 ---------- */
