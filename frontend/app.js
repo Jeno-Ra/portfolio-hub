@@ -36,6 +36,7 @@ const tplTyping = $("tpl-typing");
 async function api(path, options = {}) {
   const res = await fetch(API + path, {
     headers: { "Content-Type": "application/json" },
+    cache: "no-store", // 禁用缓存：否则新增后重新拉取可能拿到旧响应
     ...options,
   });
 
@@ -109,15 +110,22 @@ async function loadWorks() {
 }
 
 /* ---------- 筛选 ---------- */
+function syncChips() {
+  for (const chip of filtersEl.querySelectorAll(".chip")) {
+    chip.classList.toggle("chip--active", chip.dataset.type === state.filter);
+  }
+}
+
+function setFilter(type) {
+  state.filter = type;
+  syncChips();
+  renderWorks();
+}
+
 filtersEl.addEventListener("click", (event) => {
   const chip = event.target.closest(".chip");
   if (!chip) return;
-
-  state.filter = chip.dataset.type;
-  for (const c of filtersEl.querySelectorAll(".chip")) {
-    c.classList.toggle("chip--active", c === chip);
-  }
-  renderWorks();
+  setFilter(chip.dataset.type);
 });
 
 /* ---------- 新增 / 编辑弹窗 ---------- */
@@ -145,7 +153,7 @@ $("work-form").addEventListener("submit", async (event) => {
     type: $("work-type").value,
     content: $("work-content").value,
     tags: $("work-tags")
-      .value.split(",")
+      .value.split(/[,，]/) // 中文逗号也要认：输入法下用户不会切英文
       .map((s) => s.trim())
       .filter(Boolean),
   };
@@ -165,6 +173,12 @@ $("work-form").addEventListener("submit", async (event) => {
       await api("/works", { method: "POST", body: JSON.stringify(payload) });
     }
     modal.close();
+
+    // 当前筛选与作品类型不符时切回「全部」，否则用户会以为没保存成功
+    if (state.filter !== "all" && state.filter !== payload.type) {
+      state.filter = "all";
+      syncChips();
+    }
     await loadWorks();
   } catch (err) {
     toast(err.message);
@@ -198,7 +212,11 @@ $("composer").addEventListener("submit", async (event) => {
   const question = $("question").value.trim();
   if (!question) return;
 
+  const sendBtn = event.target.querySelector('button[type="submit"]');
+  if (sendBtn.disabled) return; // 请求进行中，忽略重复提交
+
   $("question").value = "";
+  sendBtn.disabled = true;
   appendMessage("user", question);
 
   const typing = tplTyping.content.firstElementChild.cloneNode(true);
@@ -215,6 +233,8 @@ $("composer").addEventListener("submit", async (event) => {
   } catch (err) {
     typing.remove();
     appendMessage("assistant", `⚠ ${err.message}`);
+  } finally {
+    sendBtn.disabled = false;
   }
 });
 
