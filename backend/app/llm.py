@@ -11,6 +11,7 @@ _client = OpenAI(
     api_key=settings.deepseek_api_key,
     base_url=settings.deepseek_base_url,
     timeout=settings.llm_timeout,
+    max_retries=0,  # 关闭 SDK 内置重试，重试权统一由 chat() 控制
 )
 
 
