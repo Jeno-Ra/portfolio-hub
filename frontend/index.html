@@ -95,6 +95,38 @@
     </form>
   </dialog>
 
+  <!-- ===== 作品卡片模板：JS 直接 clone，避免手拼 HTML 字符串 ===== -->
+  <template id="tpl-work">
+    <li class="work-card">
+      <div class="work-card__head">
+        <span class="badge"></span>
+        <time class="work-card__date"></time>
+      </div>
+      <h3 class="work-card__title"></h3>
+      <p class="work-card__excerpt"></p>
+      <div class="work-card__foot">
+        <ul class="work-card__tags"></ul>
+        <button type="button" class="btn btn--ghost work-card__edit">编辑</button>
+      </div>
+    </li>
+  </template>
+
+  <!-- ===== 消息气泡模板 ===== -->
+  <template id="tpl-message">
+    <div class="msg">
+      <div class="msg__bubble"></div>
+    </div>
+  </template>
+
+  <!-- ===== 等待回复时的三点动画 ===== -->
+  <template id="tpl-typing">
+    <div class="msg msg--assistant">
+      <div class="msg__bubble msg__bubble--typing">
+        <span></span><span></span><span></span>
+      </div>
+    </div>
+  </template>
+
   <script src="app.js"></script>
 </body>
 </html>
