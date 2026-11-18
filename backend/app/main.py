@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -12,13 +14,16 @@ from sqlalchemy.orm import Session
 from backend.app import crud, llm, vector_store
 from backend.app.database import get_db, init_db
 from backend.app.embedding import embed_text
+from backend.app.indexer import index_work
 from backend.app.schemas import (
     AskRequest,
     AskResponse,
+    ImageIngest,
     WorkCreate,
     WorkResponse,
     WorkUpdate,
 )
+from backend.app.vision import describe_image
 
 app = FastAPI(title="PortfolioHub API", version="0.1.0")
 
@@ -64,7 +69,37 @@ def health():
 
 @app.post("/works", response_model=WorkResponse, status_code=201)
 def create_work(work: WorkCreate, db: Session = Depends(get_db)):
-    return crud.create_work(db, work)
+    created = crud.create_work(db, work)
+    # 入库后立刻建索引：否则新作品搜不到（之前就是这个坑）
+    index_work(db, created)
+    return created
+
+
+@app.post("/works/image", response_model=WorkResponse, status_code=201)
+def create_work_from_image(payload: ImageIngest, db: Session = Depends(get_db)):
+    """图片录入：调视觉模型生成描述 -> 存成作品 -> 建索引，一步完成。
+
+    只接受服务器本机可读的路径（本地演示够用；部署时改成上传接口）。
+    """
+    try:
+        description = describe_image(payload.image_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # 视觉服务失败：明确告诉调用方，不要静默建空作品
+        raise HTTPException(status_code=502, detail=f"图片描述生成失败：{exc}") from exc
+
+    title = payload.title or Path(payload.image_path).stem
+    created = crud.create_work(
+        db,
+        WorkCreate(
+            title=title,
+            type="image",
+            content=description,
+            tags=payload.tags,
+        ),
+    )
+    index_work(db, created)
+    return created
 
 
 @app.get("/works", response_model=list[WorkResponse])
@@ -85,6 +120,8 @@ def patch_work(work_id: int, data: WorkUpdate, db: Session = Depends(get_db)):
     work = crud.update_work(db, work_id, data)
     if work is None:
         raise HTTPException(status_code=404, detail="作品不存在")
+    # 内容变了要重建索引，否则检索还在命中旧片段
+    index_work(db, work)
     return work
 
 
@@ -92,6 +129,7 @@ def patch_work(work_id: int, data: WorkUpdate, db: Session = Depends(get_db)):
 def remove_work(work_id: int, db: Session = Depends(get_db)):
     if not crud.delete_work(db, work_id):
         raise HTTPException(status_code=404, detail="作品不存在")
+    vector_store.delete_work(work_id)  # 同步清掉向量，否则残留脏数据
 
 
 def _catalog(db: Session, limit: int = 50) -> str:

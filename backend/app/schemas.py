@@ -55,6 +55,16 @@ class WorkResponse(WorkCreate):
         return [getattr(tag, "name", tag) for tag in value or []]
 
 
+class ImageIngest(BaseModel):
+    """图片录入：给一个本机可读的图片路径，服务端生成描述后建作品"""
+
+    image_path: str = Field(..., min_length=1, description="图片的绝对路径")
+    title: str | None = Field(
+        default=None, max_length=120, description="留空则用文件名"
+    )
+    tags: list[str] = Field(default_factory=list)
+
+
 class AskRequest(BaseModel):
     """用户提问"""
 
