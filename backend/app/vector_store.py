@@ -60,7 +60,7 @@ def delete_work(work_id: int) -> None:
 def query(
     vector: list[float], top_k: int = 5, work_id: int | None = None
 ) -> list[dict]:
-    """按向量检索，返回 [{text, work_id, chunk_index, distance}, ...]，距离越小越相关。"""
+    """按向量检索，返回 [{text, work_id, chunk_index, title, distance}, ...]，距离越小越相关。"""
     col = get_collection()
     result = col.query(
         query_embeddings=[vector],
@@ -79,6 +79,7 @@ def query(
                 "text": text,
                 "work_id": meta.get("work_id"),
                 "chunk_index": meta.get("chunk_index"),
+                "title": meta.get("title"),
                 "distance": round(float(dist), 4),
             }
         )

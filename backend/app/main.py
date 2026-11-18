@@ -9,8 +9,9 @@ from openai import (
 )
 from sqlalchemy.orm import Session
 
-from backend.app import crud, llm
+from backend.app import crud, llm, vector_store
 from backend.app.database import get_db, init_db
+from backend.app.embedding import embed_text
 from backend.app.schemas import (
     AskRequest,
     AskResponse,
@@ -20,6 +21,11 @@ from backend.app.schemas import (
 )
 
 app = FastAPI(title="PortfolioHub API", version="0.1.0")
+
+# 检索参数：TOP_K 决定给模型看几段；MAX_DISTANCE 是"库里没有相关内容"的判据。
+# 0.45 来自实测校准：相关组 0.320–0.384，无关组 0.510–0.654，取中间偏相关侧。
+RETRIEVAL_TOP_K = 5
+MAX_DISTANCE = 0.45
 
 app.add_middleware(
     CORSMiddleware,
@@ -88,32 +94,59 @@ def remove_work(work_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="作品不存在")
 
 
-def _works_context(db: Session, limit: int = 50) -> str:
-    """把作品库压成一段紧凑文本，作为大模型的上下文。
-
-    这是检索链路的临时版本：全量注入（作品少时够用）。
-    第 6 周会换成「embedding 检索 top-k → 拼 prompt」，接口不变。
-    """
+def _catalog(db: Session, limit: int = 50) -> str:
+    """作品目录（只有标题/类型/标签），让模型知道"库里一共有什么"。"""
     works = crud.list_works(db, skip=0, limit=limit)
-    if not works:
-        return ""
-
     lines = []
     for w in works:
         tags = "、".join(t.name for t in w.tags) or "无"
-        excerpt = (w.content or "").strip().replace("\n", " ")[:80] or "（无简介）"
-        lines.append(f"- [{w.type}] {w.title}｜{excerpt}｜标签：{tags}")
+        lines.append(f"- [{w.type}] {w.title}｜标签：{tags}")
     return "\n".join(lines)
+
+
+def _chunks_context(hits: list[dict]) -> str:
+    """把命中的片段拼成带编号的上下文，编号与 sources 顺序一致，便于引用。"""
+    blocks = []
+    for index, hit in enumerate(hits, start=1):
+        blocks.append(
+            f"[{index}] 《{hit['title']}》第 {hit['chunk_index']} 段"
+            f"（距离 {hit['distance']}）\n{hit['text']}"
+        )
+    return "\n\n".join(blocks)
 
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest, db: Session = Depends(get_db)):
-    # 先调模型：失败时异常交给上方 handler，库里不会留下半截会话
-    context = _works_context(db) or "（当前作品库为空）"
-    answer = llm.chat(req.question, context)
+    # 1) 向量检索：只把最相关的几个片段交给模型
+    hits = vector_store.query(embed_text(req.question), top_k=RETRIEVAL_TOP_K)
+    # 再按距离过滤一遍：top-k 永远会凑满 k 条，不过滤的话"引用来源"会把无关作品也算进去
+    relevant = [hit for hit in hits if hit["distance"] <= MAX_DISTANCE]
+
+    if not relevant:
+        # 2) 距离太远 = 库里没有相关内容。直接拼一句回复，不调用大模型（零 token）
+        titles = [w.title for w in crud.list_works(db, skip=0, limit=20)]
+        if titles:
+            answer = (
+                f"库里没有找到与「{req.question}」相关的内容。"
+                f"当前库里有 {len(titles)} 条作品：" + "、".join(titles)
+            )
+        else:
+            answer = "作品库还是空的，先添加一些作品再问吧。"
+        sources: list[int] = []
+    else:
+        # 3) 命中：目录 + 相关片段一起给，既能答细节也能答"库里有什么"
+        context = (
+            f"【作品目录】\n{_catalog(db)}\n\n【相关片段】\n{_chunks_context(relevant)}"
+        )
+        answer = llm.chat(req.question, context)
+        sources = list(dict.fromkeys(hit["work_id"] for hit in relevant))
 
     conversation = crud.create_conversation(db)
     crud.add_message(db, conversation.id, "user", req.question)
     crud.add_message(db, conversation.id, "assistant", answer)
 
-    return AskResponse(answer=answer, conversation_id=conversation.id)
+    return AskResponse(
+        answer=answer,
+        conversation_id=conversation.id,
+        sources=sources,
+    )
