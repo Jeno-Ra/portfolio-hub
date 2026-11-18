@@ -8,9 +8,11 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "chromadb>=1.5.9",
     "fastapi>=0.143.0",
     "openai>=3.45.0",
     "pydantic-settings>=2.16.2",
+    "pypdf>=7.1.0",
     "python-dotenv>=1.2.4",
     "sqlalchemy>=2.1.6",
     "uvicorn>=0.54.0",
@@ -21,3 +23,8 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.17.0",
 ]
+
+[tool.pytest.ini_options]
+# 让 `uv run pytest` 从项目根导入 backend 包（否则 ModuleNotFoundError: backend）
+pythonpath = ["."]
+testpaths = ["backend/tests"]
