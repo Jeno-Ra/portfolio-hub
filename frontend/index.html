@@ -87,6 +87,12 @@
         <textarea id="work-content" rows="5"></textarea>
       </label>
 
+      <!-- 只在「新增 + 类型=图片」时出现：交给后端调视觉模型生成描述 -->
+      <label class="field" id="field-image" hidden>
+        <span class="field__label">图片路径（会自动生成描述填入内容）</span>
+        <input id="work-image" type="text" placeholder="例如 F:\素材\角色立绘.png">
+      </label>
+
       <label class="field">
         <span class="field__label">标签</span>
         <input id="work-tags" type="text" placeholder="用逗号分隔，如：明史, 分镜">

@@ -129,6 +129,12 @@ filtersEl.addEventListener("click", (event) => {
 });
 
 /* ---------- 新增 / 编辑弹窗 ---------- */
+function syncImageField() {
+  // 只有"新增 + 类型=图片"才显示路径输入；编辑时不重新生成描述
+  const show = !state.editingId && $("work-type").value === "image";
+  $("field-image").hidden = !show;
+}
+
 function openModal(work = null) {
   state.editingId = work ? work.id : null;
   $("modal-title").textContent = work ? "编辑作品" : "新增作品";
@@ -137,11 +143,14 @@ function openModal(work = null) {
   $("work-type").value = work ? work.type : "text";
   $("work-content").value = work ? work.content : "";
   $("work-tags").value = work ? (work.tags ?? []).join(", ") : "";
+  $("work-image").value = "";
+  syncImageField();
 
   modal.showModal();
   $("work-title").focus();
 }
 
+$("work-type").addEventListener("change", syncImageField);
 $("btn-new").addEventListener("click", () => openModal());
 $("btn-cancel").addEventListener("click", () => modal.close());
 
@@ -157,17 +166,32 @@ $("work-form").addEventListener("submit", async (event) => {
       .map((s) => s.trim())
       .filter(Boolean),
   };
+  const imagePath = $("work-image").value.trim();
 
   if (!payload.title) {
     toast("标题不能为空");
     return;
   }
 
+  const saveBtn = $("btn-save");
+  saveBtn.disabled = true;
+
   try {
     if (state.editingId) {
       await api(`/works/${state.editingId}`, {
         method: "PATCH",
         body: JSON.stringify(payload),
+      });
+    } else if (payload.type === "image" && imagePath) {
+      // 走图片录入：后端生成描述后再建作品，可能要几秒
+      saveBtn.textContent = "生成描述中…";
+      await api("/works/image", {
+        method: "POST",
+        body: JSON.stringify({
+          image_path: imagePath,
+          title: payload.title,
+          tags: payload.tags,
+        }),
       });
     } else {
       await api("/works", { method: "POST", body: JSON.stringify(payload) });
@@ -182,6 +206,9 @@ $("work-form").addEventListener("submit", async (event) => {
     await loadWorks();
   } catch (err) {
     toast(err.message);
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = "保存";
   }
 });
 
