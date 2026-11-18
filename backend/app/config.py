@@ -2,8 +2,8 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-APP_DIR = Path(__file__).resolve().parent        # ...\backend\app
-PROJECT_ROOT = APP_DIR.parent.parent             # ...\portfolio-hub
+APP_DIR = Path(__file__).resolve().parent  # ...\backend\app
+PROJECT_ROOT = APP_DIR.parent.parent  # ...\portfolio-hub
 
 
 class Settings(BaseSettings):
@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
     llm_timeout: int = 30
+    llm_total_budget: int = 45
 
 
 settings = Settings()
