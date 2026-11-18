@@ -20,3 +20,6 @@ wheels/
 # 数据库文件（本地数据，不入库）
 *.db
 *.db.bak*
+
+# 向量库数据（本地索引，可用 indexer 重建）
+backend/chroma_db/

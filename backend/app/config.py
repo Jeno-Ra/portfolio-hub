@@ -19,5 +19,12 @@ class Settings(BaseSettings):
     llm_timeout: int = 5
     llm_total_budget: int = 30
 
+    # 向量化服务（硅基流动，OpenAI 兼容接口）
+    embedding_api_key: str
+    embedding_base_url: str = "https://api.siliconflow.cn/v1"
+    embedding_model: str = "BAAI/bge-m3"
+    embedding_dim: int = 1024  # bge-m3 输出维度，换模型必须同步改并重建向量库
+    embedding_batch: int = 32  # 每次请求提交多少条，太大容易被限流
+
 
 settings = Settings()
