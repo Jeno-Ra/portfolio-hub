@@ -12,12 +12,12 @@ def _get_or_create_tags(db: Session, names: list[str]) -> list[models.Tag]:
     if not names:
         return []
 
-    #一次查询把已存在的都捞出来，避免逐个 SELECT
+    # 一次查询把已存在的都捞出来，避免逐个 SELECT
     stmt = select(models.Tag).where(models.Tag.name.in_(names))
     existing = {tag.name: tag for tag in db.scalars(stmt)}
 
     result: list[models.Tag] = []
-    for name in dict.fromkeys(names):  #dict.fromkeys 去重且保留顺序
+    for name in dict.fromkeys(names):  # dict.fromkeys 去重且保留顺序
         tag = existing.get(name)
         if tag is None:
             tag = models.Tag(name=name)
@@ -36,7 +36,7 @@ def create_work(db: Session, data: schemas.WorkCreate) -> models.Work:
     work.tags = _get_or_create_tags(db, data.tags)
     db.add(work)
     db.commit()
-    db.refresh(work)  #commit 之后才会拿到自增 id 和 created_at
+    db.refresh(work)  # commit 之后才会拿到自增 id 和 created_at
     return work
 
 
@@ -44,7 +44,7 @@ def list_works(db: Session, skip: int = 0, limit: int = 10) -> list[models.Work]
     """分页列出作品。必须显式 order_by，否则 SQL 不保证顺序，分页会漏行/重行。"""
     stmt = (
         select(models.Work)
-        .options(selectinload(models.Work.tags))  #一次性把标签捞出来，避免每行一次查询
+        .options(selectinload(models.Work.tags))  # 一次性把标签捞出来，避免每行一次查询
         .order_by(models.Work.id)
         .offset(skip)
         .limit(limit)
@@ -59,6 +59,38 @@ def get_work(db: Session, work_id: int) -> models.Work | None:
         work_id,
         options=[selectinload(models.Work.tags)],
     )
+
+
+def update_work(
+    db: Session, work_id: int, data: schemas.WorkUpdate
+) -> models.Work | None:
+    """部分更新。只处理客户端真正传了的字段（exclude_unset），
+    否则 PATCH 会退化成"把没传的字段全部清空"。"""
+    work = get_work(db, work_id)
+    if work is None:
+        return None
+
+    payload = data.model_dump(exclude_unset=True)
+    for field, value in payload.items():
+        if field == "tags":
+            work.tags = _get_or_create_tags(db, value)
+        else:
+            setattr(work, field, value)
+
+    db.commit()
+    db.refresh(work)
+    return work
+
+
+def delete_work(db: Session, work_id: int) -> bool:
+    """删除作品，返回是否真的删掉（接口层据此决定 204 还是 404）。
+    切片与标签关联由关系上的 cascade 一并清理。"""
+    work = get_work(db, work_id)
+    if work is None:
+        return False
+    db.delete(work)
+    db.commit()
+    return True
 
 
 def create_conversation(db: Session, title: str = "新对话") -> models.Conversation:

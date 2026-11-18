@@ -1,4 +1,5 @@
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from openai import (
     APIStatusError,
@@ -10,9 +11,23 @@ from sqlalchemy.orm import Session
 
 from backend.app import crud, llm
 from backend.app.database import get_db, init_db
-from backend.app.schemas import AskRequest, AskResponse, WorkCreate, WorkResponse
+from backend.app.schemas import (
+    AskRequest,
+    AskResponse,
+    WorkCreate,
+    WorkResponse,
+    WorkUpdate,
+)
 
 app = FastAPI(title="PortfolioHub API", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 开发期放开；部署后收紧成具体前端域名
+    allow_credentials=False,  # 与 allow_origins=["*"] 不能同时为 True
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(APIStatusError)
@@ -57,6 +72,20 @@ def get_work(work_id: int, db: Session = Depends(get_db)):
     if work is None:
         raise HTTPException(status_code=404, detail="作品不存在")
     return work
+
+
+@app.patch("/works/{work_id}", response_model=WorkResponse)
+def patch_work(work_id: int, data: WorkUpdate, db: Session = Depends(get_db)):
+    work = crud.update_work(db, work_id, data)
+    if work is None:
+        raise HTTPException(status_code=404, detail="作品不存在")
+    return work
+
+
+@app.delete("/works/{work_id}", status_code=204)
+def remove_work(work_id: int, db: Session = Depends(get_db)):
+    if not crud.delete_work(db, work_id):
+        raise HTTPException(status_code=404, detail="作品不存在")
 
 
 @app.post("/ask", response_model=AskResponse)
