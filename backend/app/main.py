@@ -1,8 +1,9 @@
+import json
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from openai import (
     APIStatusError,
     AuthenticationError,
@@ -203,6 +204,17 @@ def _chunks_context(hits: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
+def _refusal_answer(db: Session, question: str) -> str:
+    """库里没有相关内容时的回复：纯代码拼装，不调用大模型（零 token）。"""
+    titles = [w.title for w in crud.list_works(db, skip=0, limit=20)]
+    if not titles:
+        return "作品库还是空的，先添加一些作品再问吧。"
+    return (
+        f"库里没有找到与「{question}」相关的内容。"
+        f"当前库里有 {len(titles)} 条作品：" + "、".join(titles)
+    )
+
+
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest, db: Session = Depends(get_db)):
     # 1) 向量检索：只把最相关的几个片段交给模型
@@ -211,18 +223,10 @@ def ask(req: AskRequest, db: Session = Depends(get_db)):
     relevant = [hit for hit in hits if hit["distance"] <= MAX_DISTANCE]
 
     if not relevant:
-        # 2) 距离太远 = 库里没有相关内容。直接拼一句回复，不调用大模型（零 token）
-        titles = [w.title for w in crud.list_works(db, skip=0, limit=20)]
-        if titles:
-            answer = (
-                f"库里没有找到与「{req.question}」相关的内容。"
-                f"当前库里有 {len(titles)} 条作品：" + "、".join(titles)
-            )
-        else:
-            answer = "作品库还是空的，先添加一些作品再问吧。"
+        answer = _refusal_answer(db, req.question)
         sources: list[int] = []
     else:
-        # 3) 命中：目录 + 相关片段一起给，既能答细节也能答"库里有什么"
+        # 2) 命中：目录 + 相关片段一起给，既能答细节也能答"库里有什么"
         context = (
             f"【作品目录】\n{_catalog(db)}\n\n【相关片段】\n{_chunks_context(relevant)}"
         )
@@ -238,3 +242,47 @@ def ask(req: AskRequest, db: Session = Depends(get_db)):
         conversation_id=conversation.id,
         sources=sources,
     )
+
+
+def _sse(event: str, payload: dict) -> str:
+    """SSE 帧格式：event + data，末尾必须空行，否则前端切不出事件边界。"""
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@app.post("/ask/stream")
+def ask_stream(req: AskRequest, db: Session = Depends(get_db)):
+    """流式问答。事件顺序：meta（引用来源）→ delta（增量文本）→ done（会话 id）。
+
+    说明：EventSource 只支持 GET 且不能带请求体，所以前端用 fetch + ReadableStream
+    自己解析 SSE，而不是用浏览器的 EventSource。
+    """
+    hits = vector_store.query(embed_text(req.question), top_k=RETRIEVAL_TOP_K)
+    relevant = [hit for hit in hits if hit["distance"] <= MAX_DISTANCE]
+    sources = list(dict.fromkeys(hit["work_id"] for hit in relevant))
+
+    def generate():
+        if not relevant:
+            # 没有命中：拒绝文案当作一个 delta 发出去，不调用模型
+            answer = _refusal_answer(db, req.question)
+            yield _sse("meta", {"sources": []})
+            yield _sse("delta", {"text": answer})
+        else:
+            context = f"【作品目录】\n{_catalog(db)}\n\n【相关片段】\n{_chunks_context(relevant)}"
+            yield _sse("meta", {"sources": sources})
+            pieces: list[str] = []
+            try:
+                for delta in llm.chat_stream(req.question, context):
+                    pieces.append(delta)
+                    yield _sse("delta", {"text": delta})
+            except Exception as exc:  # 流已开始，无法重试，只能明确报错
+                yield _sse("error", {"message": f"生成中断：{exc}"})
+                return
+            answer = "".join(pieces)
+
+        # 完整答案落库（与 /ask 一致：成功后才写，失败不留半截会话）
+        conversation = crud.create_conversation(db)
+        crud.add_message(db, conversation.id, "user", req.question)
+        crud.add_message(db, conversation.id, "assistant", answer)
+        yield _sse("done", {"conversation_id": conversation.id, "sources": sources})
+
+    return StreamingResponse(generate(), media_type="text/event-stream")

@@ -76,3 +76,30 @@ def chat(prompt: str, context: str = "") -> str:
             time.sleep(backoff)
 
     return FALLBACK
+
+
+def chat_stream(prompt: str, context: str = ""):
+    """流式版本：逐块 yield 文本增量。
+
+    与 chat() 的关键差别：**不做重试**。
+    流一旦开始输出，重试会导致内容重复（前端已经渲染了前半截），
+    所以这里让异常直接抛给调用方，由它转成一个 error 事件。
+    """
+    system = build_system(context)
+    stream = _client.chat.completions.create(
+        model=settings.deepseek_model,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.3,
+        timeout=settings.llm_timeout,
+        stream=True,
+    )
+
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        if delta and delta.content:
+            yield delta.content

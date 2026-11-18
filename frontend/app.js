@@ -231,25 +231,104 @@ async function removeWork(work) {
 }
 
 /* ---------- 对话 ---------- */
+function renderSources(node, sources) {
+  const old = node.querySelector(".msg__sources");
+  if (old) old.remove();
+  if (!sources || sources.length === 0) return;
+
+  // work_id → 标题；去重（同一作品多个片段只显示一次）
+  const titles = sources.map(
+    (id) => state.works.find((w) => w.id === id)?.title ?? `作品 #${id}`,
+  );
+  const line = document.createElement("div");
+  line.className = "msg__sources";
+  line.textContent = `引用：${[...new Set(titles)].join("、")}`;
+  node.appendChild(line);
+}
+
 function appendMessage(role, text, sources = []) {
   const node = tplMessage.content.firstElementChild.cloneNode(true);
   node.classList.add(`msg--${role}`);
   node.querySelector(".msg__bubble").textContent = text; // 安全：纯文本
-
-  // 引用来源：把 work_id 映射成标题显示，让"答案从哪来"在界面上可见
-  if (sources.length) {
-    const titles = sources.map(
-      (id) => state.works.find((w) => w.id === id)?.title ?? `作品 #${id}`,
-    );
-    const line = document.createElement("div");
-    line.className = "msg__sources";
-    line.textContent = `引用：${[...new Set(titles)].join("、")}`;
-    node.appendChild(line);
-  }
-
   messagesEl.appendChild(node);
+  renderSources(node, sources);
   messagesEl.scrollTop = messagesEl.scrollHeight;
   return node;
+}
+
+/* 解析一个 SSE 帧：可能有多行 data，最后 JSON.parse */
+function parseSseFrame(raw) {
+  let event = "message";
+  const dataLines = [];
+  for (const line of raw.split("\n")) {
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+  }
+  if (dataLines.length === 0) return null;
+  try {
+    return { event, data: JSON.parse(dataLines.join("\n")) };
+  } catch {
+    return null;
+  }
+}
+
+/* 流式问答：fetch + ReadableStream 手动解析 SSE
+   （EventSource 只支持 GET 且不能带 body，带问题正文的 POST 用不了） */
+async function askStream(question) {
+  const node = appendMessage("assistant", "…"); // 占位，等第一个字
+  const bubble = node.querySelector(".msg__bubble");
+
+  const startedAt = performance.now();
+  let firstDeltaAt = 0;
+  let sources = [];
+  let buffer = "";
+
+  try {
+    const resp = await fetch(API + "/ask/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ question }),
+    });
+    if (!resp.ok || !resp.body) throw new Error(`请求失败（${resp.status}）`);
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let sep;
+      while ((sep = buffer.indexOf("\n\n")) >= 0) {
+        const frame = parseSseFrame(buffer.slice(0, sep));
+        buffer = buffer.slice(sep + 2);
+        if (!frame) continue;
+
+        if (frame.event === "meta") {
+          sources = frame.data.sources ?? [];
+        } else if (frame.event === "delta") {
+          if (firstDeltaAt === 0) {
+            firstDeltaAt = performance.now();
+            bubble.textContent = ""; // 清掉占位符
+          }
+          bubble.textContent += frame.data.text ?? "";
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        } else if (frame.event === "error") {
+          throw new Error(frame.data.message || "生成失败");
+        }
+      }
+    }
+
+    renderSources(node, sources);
+    console.debug(
+      `[stream] 首字 ${Math.round(firstDeltaAt - startedAt)}ms · ` +
+        `总时长 ${Math.round(performance.now() - startedAt)}ms`,
+    );
+  } catch (err) {
+    bubble.textContent = `⚠ ${err.message}`;
+  }
 }
 
 $("composer").addEventListener("submit", async (event) => {
@@ -265,20 +344,8 @@ $("composer").addEventListener("submit", async (event) => {
   sendBtn.disabled = true;
   appendMessage("user", question);
 
-  const typing = tplTyping.content.firstElementChild.cloneNode(true);
-  messagesEl.appendChild(typing);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-
   try {
-    const data = await api("/ask", {
-      method: "POST",
-      body: JSON.stringify({ question }),
-    });
-    typing.remove();
-    appendMessage("assistant", data.answer, data.sources ?? []);
-  } catch (err) {
-    typing.remove();
-    appendMessage("assistant", `⚠ ${err.message}`);
+    await askStream(question);
   } finally {
     sendBtn.disabled = false;
   }
