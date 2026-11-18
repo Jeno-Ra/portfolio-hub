@@ -88,10 +88,29 @@ def remove_work(work_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="作品不存在")
 
 
+def _works_context(db: Session, limit: int = 50) -> str:
+    """把作品库压成一段紧凑文本，作为大模型的上下文。
+
+    这是检索链路的临时版本：全量注入（作品少时够用）。
+    第 6 周会换成「embedding 检索 top-k → 拼 prompt」，接口不变。
+    """
+    works = crud.list_works(db, skip=0, limit=limit)
+    if not works:
+        return ""
+
+    lines = []
+    for w in works:
+        tags = "、".join(t.name for t in w.tags) or "无"
+        excerpt = (w.content or "").strip().replace("\n", " ")[:80] or "（无简介）"
+        lines.append(f"- [{w.type}] {w.title}｜{excerpt}｜标签：{tags}")
+    return "\n".join(lines)
+
+
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest, db: Session = Depends(get_db)):
     # 先调模型：失败时异常交给上方 handler，库里不会留下半截会话
-    answer = llm.chat(req.question)
+    context = _works_context(db) or "（当前作品库为空）"
+    answer = llm.chat(req.question, context)
 
     conversation = crud.create_conversation(db)
     crud.add_message(db, conversation.id, "user", req.question)

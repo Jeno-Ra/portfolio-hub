@@ -15,8 +15,22 @@ _client = OpenAI(
 )
 
 
-def chat(prompt: str) -> str:
-    """调 DeepSeek：最多 MAX_RETRIES 次重试，整体不超过总预算，失败返回兜底文案。"""
+def chat(prompt: str, context: str = "") -> str:
+    """调 DeepSeek：最多 MAX_RETRIES 次重试，整体不超过总预算，失败返回兜底文案。
+
+    context 是作品库摘要：给了就按"作品库助手"回答，
+    没给就是普通问答（第 6 周会把它换成向量检索的 top-k 结果）。
+    """
+    if context:
+        system = (
+            "你是个人作品库助手。只能依据下面列出的作品回答；"
+            "列表里没有的内容，直接说「库里没有相关作品」，绝不编造。\n"
+            "---- 作品列表 ----\n"
+            f"{context}"
+        )
+    else:
+        system = "你是一个简洁的中文助手。"
+
     start = time.monotonic()
 
     for attempt in range(MAX_RETRIES + 1):
@@ -28,7 +42,7 @@ def chat(prompt: str) -> str:
             resp = _client.chat.completions.create(
                 model=settings.deepseek_model,
                 messages=[
-                    {"role": "system", "content": "你是一个简洁的中文助手。"},
+                    {"role": "system", "content": system},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,
