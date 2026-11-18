@@ -197,10 +197,22 @@ async function removeWork(work) {
 }
 
 /* ---------- 对话 ---------- */
-function appendMessage(role, text) {
+function appendMessage(role, text, sources = []) {
   const node = tplMessage.content.firstElementChild.cloneNode(true);
   node.classList.add(`msg--${role}`);
   node.querySelector(".msg__bubble").textContent = text; // 安全：纯文本
+
+  // 引用来源：把 work_id 映射成标题显示，让"答案从哪来"在界面上可见
+  if (sources.length) {
+    const titles = sources.map(
+      (id) => state.works.find((w) => w.id === id)?.title ?? `作品 #${id}`,
+    );
+    const line = document.createElement("div");
+    line.className = "msg__sources";
+    line.textContent = `引用：${[...new Set(titles)].join("、")}`;
+    node.appendChild(line);
+  }
+
   messagesEl.appendChild(node);
   messagesEl.scrollTop = messagesEl.scrollHeight;
   return node;
@@ -229,7 +241,7 @@ $("composer").addEventListener("submit", async (event) => {
       body: JSON.stringify({ question }),
     });
     typing.remove();
-    appendMessage("assistant", data.answer);
+    appendMessage("assistant", data.answer, data.sources ?? []);
   } catch (err) {
     typing.remove();
     appendMessage("assistant", `⚠ ${err.message}`);

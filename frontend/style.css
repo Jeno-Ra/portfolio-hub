@@ -318,11 +318,13 @@ body {
 
 .msg {
   display: flex;
+  flex-direction: column; /* 气泡和引用来源上下排列 */
+  align-items: flex-start;
   margin-bottom: 12px;
 }
 
 .msg--user {
-  justify-content: flex-end;
+  align-items: flex-end;
 }
 
 .msg__bubble {
@@ -338,6 +340,13 @@ body {
 .msg--user .msg__bubble {
   background: var(--accent);
   color: #fff;
+}
+
+/* 引用来源：小字，弱化但不隐藏 */
+.msg__sources {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 /* 等待回复的三点动画 */
