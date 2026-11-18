@@ -12,7 +12,7 @@ from openai import (
 )
 from sqlalchemy.orm import Session
 
-from backend.app import crud, llm, vector_store
+from backend.app import crud, llm, router, vector_store
 from backend.app.database import get_db, init_db
 from backend.app.embedding import embed_text
 from backend.app.files import extract_text
@@ -215,23 +215,150 @@ def _refusal_answer(db: Session, question: str) -> str:
     )
 
 
+# 最近一次检索命中的作品 id。用于解析「把刚才那个的标题改成 X」这类指代。
+# 单进程单用户的原型做法；多用户要改成按会话存（第 9 周）。
+LAST_HITS: list[int] = []
+
+TYPE_LABEL = {
+    "video": "视频",
+    "image": "图片",
+    "text": "文本",
+    "code": "代码",
+    "project": "项目",
+}
+
+
+def _stats_answer(db: Session) -> str:
+    """统计类问题：纯 SQL 聚合，不需要模型。"""
+    works = crud.list_works(db, skip=0, limit=200)
+    if not works:
+        return "库里还没有作品。"
+    by_type: dict[str, int] = {}
+    for work in works:
+        by_type[work.type] = by_type.get(work.type, 0) + 1
+    detail = "、".join(
+        f"{TYPE_LABEL.get(kind, kind)} {count} 条"
+        for kind, count in sorted(by_type.items())
+    )
+    return f"库里共 {len(works)} 条作品：{detail}。"
+
+
+def _resolve_targets(db: Session, keyword: str) -> list:
+    """按标题关键词找作品；没关键词（或没匹配上）时回退到"刚才检索到的那几条"。"""
+    works = crud.list_works(db, skip=0, limit=200)
+    if keyword:
+        matched = [w for w in works if keyword in w.title]
+        if matched:
+            return matched
+    if LAST_HITS:
+        by_id = {w.id: w for w in works}
+        return [by_id[i] for i in LAST_HITS if i in by_id]
+    return []
+
+
+def _handle_management(
+    db: Session, routed: dict, confirm: bool
+) -> tuple[str, list[int]]:
+    """处理 create / update / delete，返回 (回复文案, 涉及的作品 id)。"""
+    intent = routed["intent"]
+
+    if intent == "create":
+        if not routed["title"]:
+            return (
+                "要新增作品的话，请把标题一起说出来，"
+                "例如：记一条《茶室空镜》，内容是今天拍的素材。",
+                [],
+            )
+        created = crud.create_work(
+            db,
+            WorkCreate(
+                title=routed["title"],
+                type=routed.get("type") or "text",
+                content=routed["content"],
+                tags=routed["tags"],
+            ),
+        )
+        index_work(db, created)
+        return f"已新增作品《{created.title}》（id={created.id}），索引已建好。", [
+            created.id
+        ]
+
+    targets = _resolve_targets(db, routed["target"])
+    if not targets:
+        return (
+            "没找到要操作的作品。可以给我标题关键词，"
+            "或者说「刚才那个」指代上一次检索到的作品。",
+            [],
+        )
+    if len(targets) > 1:
+        names = "、".join(f"《{w.title}》(id={w.id})" for w in targets[:5])
+        return f"匹配到 {len(targets)} 条作品，请说得更具体些：{names}", []
+
+    work = targets[0]
+
+    if intent == "delete":
+        if not confirm:
+            return (
+                f"即将删除《{work.title}》(id={work.id})，该操作不可撤销，"
+                f"确认请再发一次并带上「确认删除」。",
+                [work.id],
+            )
+        vector_store.delete_work(work.id)
+        crud.delete_work(db, work.id)
+        return f"已删除《{work.title}》。", []
+
+    # update
+    field = (
+        routed["field"]
+        if routed["field"] in {"title", "type", "content", "tags"}
+        else "title"
+    )
+    field_label = {"title": "标题", "type": "类型", "content": "内容", "tags": "标签"}[
+        field
+    ]
+    value = routed["value"]
+    if not value:
+        return f"要把《{work.title}》的{field_label}改成什么？", [work.id]
+
+    old_title = work.title
+
+    if field == "tags":
+        tags = [t.strip() for t in value.replace("，", ",").split(",") if t.strip()]
+        updated = crud.update_work(db, work.id, WorkUpdate(tags=tags))
+    else:
+        updated = crud.update_work(db, work.id, WorkUpdate(**{field: value}))
+
+    if updated is None:
+        return f"更新《{old_title}》失败，作品可能已被删除。", []
+
+    index_work(db, updated)  # 内容变了必须重建索引，否则检索命中旧片段
+    return f"已把《{old_title}》的{field_label}改为「{value}」。", [work.id]
+
+
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest, db: Session = Depends(get_db)):
-    # 1) 向量检索：只把最相关的几个片段交给模型
-    hits = vector_store.query(embed_text(req.question), top_k=RETRIEVAL_TOP_K)
-    # 再按距离过滤一遍：top-k 永远会凑满 k 条，不过滤的话"引用来源"会把无关作品也算进去
-    relevant = [hit for hit in hits if hit["distance"] <= MAX_DISTANCE]
+    """先判意图，再分发：search 走 RAG，其余走管理动作。"""
+    routed = router.route(req.question)
+    intent = routed["intent"]
 
-    if not relevant:
-        answer = _refusal_answer(db, req.question)
-        sources: list[int] = []
+    if intent == "stats":
+        answer, sources = _stats_answer(db), []
+    elif intent in {"create", "update", "delete"}:
+        answer, sources = _handle_management(db, routed, req.confirm)
     else:
-        # 2) 命中：目录 + 相关片段一起给，既能答细节也能答"库里有什么"
-        context = (
-            f"【作品目录】\n{_catalog(db)}\n\n【相关片段】\n{_chunks_context(relevant)}"
-        )
-        answer = llm.chat(req.question, context)
-        sources = list(dict.fromkeys(hit["work_id"] for hit in relevant))
+        # 1) 向量检索：只把最相关的几个片段交给模型
+        hits = vector_store.query(embed_text(req.question), top_k=RETRIEVAL_TOP_K)
+        # 再按距离过滤：top-k 永远会凑满 k 条，不过滤会把无关作品也算进引用
+        relevant = [hit for hit in hits if hit["distance"] <= MAX_DISTANCE]
+
+        if not relevant:
+            answer, sources = _refusal_answer(db, req.question), []
+            LAST_HITS.clear()
+        else:
+            context = f"【作品目录】\n{_catalog(db)}\n\n【相关片段】\n{_chunks_context(relevant)}"
+            answer = llm.chat(req.question, context)
+            sources = list(dict.fromkeys(hit["work_id"] for hit in relevant))
+            LAST_HITS[:] = sources  # 记住"刚才那几个"，供指代解析用
 
     conversation = crud.create_conversation(db)
     crud.add_message(db, conversation.id, "user", req.question)

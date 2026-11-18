@@ -78,6 +78,24 @@ def chat(prompt: str, context: str = "") -> str:
     return FALLBACK
 
 
+def raw_chat(system: str, prompt: str) -> str:
+    """不带作品上下文的原始调用，给意图解析这类"内部任务"用。
+
+    复用同一个 client，但只有一次尝试：解析失败时调用方会回退成 search，
+    没必要为了一个可能失败的分类任务重试 4 次。
+    """
+    resp = _client.chat.completions.create(
+        model=settings.deepseek_model,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0,
+        timeout=settings.llm_timeout,
+    )
+    return (resp.choices[0].message.content or "").strip()
+
+
 def chat_stream(prompt: str, context: str = ""):
     """流式版本：逐块 yield 文本增量。
 

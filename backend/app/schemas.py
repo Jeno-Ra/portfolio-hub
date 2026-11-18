@@ -81,6 +81,10 @@ class AskRequest(BaseModel):
     """用户提问"""
 
     question: str = Field(..., min_length=1, max_length=500, description="用户的问题")
+    confirm: bool = Field(
+        default=False,
+        description="删除类操作必须显式确认；首次请求只返回预览",
+    )
 
 
 class AskResponse(BaseModel):
