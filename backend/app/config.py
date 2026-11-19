@@ -41,5 +41,10 @@ class Settings(BaseSettings):
     # 容器里由 compose 注入 postgresql+psycopg://... 指向 postgres 服务。
     database_url: str = ""
 
+    # 向量库地址。留空 = 嵌入式 Chroma（本地开发，一个目录一份库）；
+    # 有值 = 连独立的 chroma 服务（容器编排时由 compose 注入）。
+    chroma_host: str = ""
+    chroma_port: int = 8000
+
 
 settings = Settings()

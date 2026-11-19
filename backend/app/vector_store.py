@@ -8,6 +8,7 @@
 id 用 ``{work_id}:{chunk_index}``，这样删改单个作品时可以按前缀/元数据精确定位。
 """
 
+import time
 from pathlib import Path
 
 import chromadb
@@ -17,11 +18,42 @@ from backend.app.config import settings
 # 默认落在 backend/chroma_db；容器里由 compose 注入 CHROMA_DIR=/app/data/chroma
 _DEFAULT_CHROMA = Path(__file__).resolve().parent.parent / "chroma_db"
 CHROMA_DIR = Path(settings.chroma_dir) if settings.chroma_dir else _DEFAULT_CHROMA
-CHROMA_DIR.mkdir(parents=True, exist_ok=True)
 
 COLLECTION = "works"
 
-_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+
+def _build_client():
+    """两种形态：
+
+    - 嵌入式（本地开发）：PersistentClient 指向一个目录，不需要起任何容器
+    - 服务端（容器编排）：HttpClient 连 chroma 服务，向量数据独立持久化，
+      后端可以随便删了重建，也允许多实例共享同一份索引
+
+    服务端模式下 HttpClient 构造时就会发 heartbeat，chroma 没起来会抛异常。
+    这里加一段重试：即使 compose 的健康检查漏了，后端也不会因为慢半拍就崩。
+    """
+    if not settings.chroma_host:
+        CHROMA_DIR.mkdir(parents=True, exist_ok=True)
+        return chromadb.PersistentClient(path=str(CHROMA_DIR))
+
+    last_error: Exception | None = None
+    for _ in range(30):
+        try:
+            client = chromadb.HttpClient(
+                host=settings.chroma_host, port=settings.chroma_port
+            )
+            client.heartbeat()
+            return client
+        except Exception as exc:  # noqa: BLE001 — 未就绪就等，最后统一报错
+            last_error = exc
+            time.sleep(1)
+    raise RuntimeError(
+        f"连不上 Chroma 服务 {settings.chroma_host}:{settings.chroma_port}"
+        f"（等了 30 秒）：{last_error}"
+    )
+
+
+_client = _build_client()
 
 
 def get_collection():

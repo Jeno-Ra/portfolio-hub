@@ -31,15 +31,23 @@ services:
     environment:
       # 覆盖 .env 里的默认值：数据落到挂载卷，而不是镜像内部
       DB_PATH: /app/data/portfolio_hub.db
-      CHROMA_DIR: /app/data/chroma
       # 关系库指向 postgres 服务（服务名即主机名）。
       # 密码与下面 postgres 的 POSTGRES_PASSWORD 读同一个变量，避免写死两处。
       DATABASE_URL: postgresql+psycopg://portfolio:${POSTGRES_PASSWORD:-portfolio_dev_password}@postgres:5432/portfolio
+      # 向量库指向 chroma 服务（服务端模式），不再用容器内的嵌入式库
+      CHROMA_HOST: chroma
+      CHROMA_PORT: "8000"
     volumes:
       - appdata:/app/data
     depends_on:
       postgres:
         condition: service_healthy
+      chroma:
+        # chroma 官镜像是最小化的（只有 chroma 二进制，没有 python/curl/wget），
+        # 写不了 shell 探活，所以这里只等"容器启动"；
+        # 真正的就绪判断在 backend 的 vector_store._build_client() 里：
+        # 30 次 × 1 秒的 heartbeat 重试，超时才报错，比 shell 探活更可靠。
+        condition: service_started
     restart: "no"
 
   postgres:
