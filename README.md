@@ -112,6 +112,56 @@ curl http://127.0.0.1:8000/health
 数据落在命名卷 `portfolio_appdata` / `portfolio_pgdata` / `portfolio_chromadata`。
 **停服务用 `docker compose stop` 或 `down`，不要用 `down -v`**（`-v` 会连数据一起删）。
 
+#### 实测数据（本机 4 GB / 4 核 WSL，2026-11-20）
+
+| 场景 | 到 backend healthy |
+| ---- | ------------------ |
+| `docker compose restart`（只重启容器） | **6.5 秒** |
+| `down` + `up`（删容器，保数据） | **11.1 秒** |
+| `down -v` + `up --build`（全删重建） | **12.8 秒** |
+
+| 指标 | 数值 |
+| ---- | ---- |
+| 镜像体积 | **796 MB**（单阶段写法会到 1.72 GB） |
+| 三服务常驻内存 | backend 143 MB + postgres 35 MB + chroma 11 MB ≈ **190 MB** |
+| 数据卷 | 3 个命名卷；删 backend 容器不影响 PG 与向量 |
+
+#### 怎么确认真的跑起来了（不只是 `docker ps` 有输出）
+
+```bash
+# 1. 三个容器健康
+docker compose ps                     # backend / postgres 应显示 (healthy)
+
+# 2. 后端连的是 PostgreSQL
+docker exec portfolio-backend python -c \
+  "from backend.app.database import engine; print(engine.dialect.name)"   # -> postgresql
+
+# 3. 后端连的是 chroma 服务（不是嵌入式）
+docker exec portfolio-backend python -c \
+  "from backend.app import vector_store as v; print(type(v._client._server).__module__)"
+# -> chromadb.api.fastapi
+
+# 4. 表建好了
+docker exec portfolio-postgres psql -U portfolio -d portfolio -c '\dt'   # 6 张表
+
+# 5. 端到端：建一条作品再问它
+curl -s -X POST http://127.0.0.1:8000/works -H 'Content-Type: application/json' \
+  -d '{"title":"测试","type":"text","content":"金山岭长城清晨五点拍摄，航拍 6 个镜头"}'
+curl -s -X POST http://127.0.0.1:8000/ask -H 'Content-Type: application/json' \
+  -d '{"question":"长城是什么时候拍的"}'      # 回答里应带 [1] 引用
+```
+
+#### 常见问题
+
+| 现象 | 原因 | 处理 |
+| ---- | ---- | ---- |
+| `docker pull` 超时 / `dial tcp registry-1.docker.io` | Docker Hub 国内不可达 | 在 Docker Desktop → Settings → Docker Engine 里加 `registry-mirrors`（实测可用：`docker.m.daocloud.io`、`docker.1panel.live`、`hub.rat.dev`） |
+| 引擎无响应、`docker info` 卡几十秒 | 同时跑了太多容器，4 GB 不够 | `wsl --shutdown` 重启引擎；一次只开一个项目 |
+| `PermissionError: /app/data/chroma` | 命名卷属主是 root，容器内 appuser 写不进 | 镜像里预建目录并 `chown`（已在 Dockerfile 处理） |
+| `container is unhealthy`（chroma） | 官方镜像是最小化镜像，没有 curl/python，写不了探活 | 改用代码里的 heartbeat 重试（`vector_store._build_client`） |
+| `syntax error at or near "PRAGMA"` | `_ensure_columns()` 是 SQLite 方言 | 只在 SQLite 下执行（已加判断） |
+| `/health` 通了但容器其实在崩 | 宿主机还有别的进程占着 8000 | `Get-NetTCPConnection -LocalPort 8000` 先确认端口没被占 |
+
 ## 大模型调用的容错
 
 `/ask` 背后由 `backend/app/llm.py` 统一封装，三层保护：
