@@ -1,3 +1,4 @@
+import difflib
 import json
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from openai import (
 )
 from sqlalchemy.orm import Session
 
-from backend.app import crud, llm, router, vector_store
+from backend.app import crud, llm, policy, router, vector_store
 from backend.app.database import get_db, init_db
 from backend.app.embedding import embed_text
 from backend.app.files import extract_text
@@ -244,12 +245,30 @@ def _stats_answer(db: Session) -> str:
 
 
 def _resolve_targets(db: Session, keyword: str) -> list:
-    """按标题关键词找作品；没关键词（或没匹配上）时回退到"刚才检索到的那几条"。"""
+    """按标题找作品，三档回退：
+
+    1. 关键词是标题子串 → 直接命中
+    2. 子串不中 → 用相似度模糊匹配（改过标题后，旧说法还能找到）
+    3. 都没有关键词或都没匹配 → 回退到"刚才操作/检索到的那几条"
+    """
     works = crud.list_works(db, skip=0, limit=200)
     if keyword:
         matched = [w for w in works if keyword in w.title]
         if matched:
             return matched
+
+        scored = sorted(
+            (
+                (difflib.SequenceMatcher(None, keyword, w.title).ratio(), w)
+                for w in works
+            ),
+            key=lambda pair: pair[0],
+            reverse=True,
+        )
+        fuzzy = [w for score, w in scored if score >= 0.5]
+        if fuzzy:
+            return fuzzy[:3]
+
     if LAST_HITS:
         by_id = {w.id: w for w in works}
         return [by_id[i] for i in LAST_HITS if i in by_id]
@@ -307,15 +326,13 @@ def _handle_management(
         crud.delete_work(db, work.id)
         return f"已删除《{work.title}》。", []
 
-    # update
-    field = (
-        routed["field"]
-        if routed["field"] in {"title", "type", "content", "tags"}
-        else "title"
-    )
-    field_label = {"title": "标题", "type": "类型", "content": "内容", "tags": "标签"}[
-        field
-    ]
+    # update：只有标题/标签/类型可改，内容由 policy 拦截
+    field = routed["field"] if routed["field"] else "title"
+    allowed, reason = policy.check_edit_field(field)
+    if not allowed:
+        return reason, [work.id]
+
+    field_label = policy.FIELD_LABEL[field]
     value = routed["value"]
     if not value:
         return f"要把《{work.title}》的{field_label}改成什么？", [work.id]
@@ -331,7 +348,7 @@ def _handle_management(
     if updated is None:
         return f"更新《{old_title}》失败，作品可能已被删除。", []
 
-    index_work(db, updated)  # 内容变了必须重建索引，否则检索命中旧片段
+    index_work(db, updated)  # 抬头/标签变了要重建索引，否则检索命中旧元数据
     return f"已把《{old_title}》的{field_label}改为「{value}」。", [work.id]
 
 
@@ -345,6 +362,8 @@ def ask(req: AskRequest, db: Session = Depends(get_db)):
         answer, sources = _stats_answer(db), []
     elif intent in {"create", "update", "delete"}:
         answer, sources = _handle_management(db, routed, req.confirm)
+        if sources:  # 让「刚才那个」也能指代刚操作过的作品
+            LAST_HITS[:] = sources
     else:
         # 1) 向量检索：只把最相关的几个片段交给模型
         hits = vector_store.query(embed_text(req.question), top_k=RETRIEVAL_TOP_K)
