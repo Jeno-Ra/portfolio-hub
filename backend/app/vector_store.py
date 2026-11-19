@@ -12,7 +12,13 @@ from pathlib import Path
 
 import chromadb
 
-CHROMA_DIR = Path(__file__).resolve().parent.parent / "chroma_db"
+from backend.app.config import settings
+
+# 默认落在 backend/chroma_db；容器里由 compose 注入 CHROMA_DIR=/app/data/chroma
+_DEFAULT_CHROMA = Path(__file__).resolve().parent.parent / "chroma_db"
+CHROMA_DIR = Path(settings.chroma_dir) if settings.chroma_dir else _DEFAULT_CHROMA
+CHROMA_DIR.mkdir(parents=True, exist_ok=True)
+
 COLLECTION = "works"
 
 _client = chromadb.PersistentClient(path=str(CHROMA_DIR))

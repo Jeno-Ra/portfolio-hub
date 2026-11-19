@@ -32,5 +32,10 @@ class Settings(BaseSettings):
     gpt_model: str = "gpt-6.1-terra"
     vision_timeout: int = 120  # 单张图 4–5 秒，留足余量给大图
 
+    # 数据落盘位置。留空 = 用 backend/ 下的默认路径（本地开发）。
+    # 容器里由 compose 注入 /app/data/...，这样数据在命名卷里，重建容器不丢。
+    db_path: str = ""
+    chroma_dir: str = ""
+
 
 settings = Settings()

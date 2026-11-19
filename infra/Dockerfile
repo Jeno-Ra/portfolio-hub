@@ -50,6 +50,11 @@ RUN useradd --create-home --uid 10001 appuser
 
 WORKDIR /app
 
+# /app/data 是命名卷的挂载点。必须在这里建好并交给 appuser：
+#   卷首次挂载时，Docker 会沿用镜像里这个目录的属主；
+#   如果镜像里没有这个目录，卷会被 root 拥有，appuser 写入就会 Permission denied。
+RUN mkdir -p /app/data && chown appuser:appuser /app/data
+
 COPY --chown=appuser:appuser --from=builder /app/.venv /app/.venv
 COPY --chown=appuser:appuser backend ./backend
 COPY --chown=appuser:appuser frontend ./frontend

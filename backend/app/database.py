@@ -4,10 +4,14 @@ from pathlib import Path
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
+from backend.app.config import settings
 from backend.app.models import Base
 
-# 数据库文件固定在 backend/ 下，用绝对路径，不依赖启动时的工作目录
-DB_PATH = Path(__file__).resolve().parent.parent / "portfolio_hub.db"
+# 默认落在 backend/ 下；容器里由 compose 注入 DB_PATH=/app/data/...
+# 用绝对路径，不依赖启动时的工作目录
+_DEFAULT_DB = Path(__file__).resolve().parent.parent / "portfolio_hub.db"
+DB_PATH = Path(settings.db_path) if settings.db_path else _DEFAULT_DB
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 DATABASE_URL = f"sqlite:///{DB_PATH.as_posix()}"
 
 # check_same_thread=False：FastAPI 的同步路由跑在线程池里，

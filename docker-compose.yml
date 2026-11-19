@@ -1,0 +1,72 @@
+# ============================================================
+# PortfolioHub 三服务编排
+#
+#   backend  ← 应用（FastAPI）
+#   postgres ← 关系库（作品、切片、会话）
+#   chroma   ← 向量库（片段向量）
+#
+# 几个刻意的决定：
+#   1. postgres / chroma 不映射宿主机端口：只有 backend 需要对外，
+#      少暴露一个端口就少一个被扫的风险，也不会和 RAGFlow 抢 5432。
+#   2. depends_on + condition: service_healthy：等数据库真的能连再启后端，
+#      只写 depends_on 只保证"容器启动了"，那时 Postgres 还没准备好接受连接。
+#   3. 数据全部走命名卷：docker compose down 不会删卷，重建容器数据还在。
+#   4. restart: "no"：本项目的容器由你手动启停（和 RAGFlow 一样），
+#      避免开机时两个项目一起抢那 4 GB 内存。
+# ============================================================
+
+name: portfolio
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+    image: portfolio-hub:0.2
+    container_name: portfolio-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # 覆盖 .env 里的默认值：数据落到挂载卷，而不是镜像内部
+      DB_PATH: /app/data/portfolio_hub.db
+      CHROMA_DIR: /app/data/chroma
+    volumes:
+      - appdata:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: portfolio-postgres
+    environment:
+      POSTGRES_USER: portfolio
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-portfolio_dev_password}
+      POSTGRES_DB: portfolio
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # 没有这条，depends_on 就只是"容器起来了"，不是"能连了"
+      test: ["CMD-SHELL", "pg_isready -U portfolio -d portfolio"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: "no"
+
+  chroma:
+    image: chromadb/chroma:1.5.9
+    container_name: portfolio-chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    volumes:
+      - chromadata:/data
+    restart: "no"
+
+volumes:
+  appdata:
+  pgdata:
+  chromadata:
