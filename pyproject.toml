@@ -12,6 +12,7 @@ dependencies = [
     "fastapi>=0.143.0",
     "openai>=3.45.0",
     "openpyxl>=3.1.5",
+    "psycopg[binary]>=3.3.9",
     "pydantic-settings>=2.16.2",
     "pypdf>=7.1.0",
     "python-docx>=1.2.0",

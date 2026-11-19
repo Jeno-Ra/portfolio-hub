@@ -37,5 +37,9 @@ class Settings(BaseSettings):
     db_path: str = ""
     chroma_dir: str = ""
 
+    # 关系库连接串。留空 = 用本地 SQLite（开发默认）；
+    # 容器里由 compose 注入 postgresql+psycopg://... 指向 postgres 服务。
+    database_url: str = ""
+
 
 settings = Settings()
