@@ -1,0 +1,33 @@
+# 构建上下文排除清单。注意：这个文件必须放在**构建上下文根目录**（仓库根），
+# 不是 infra/ 里——docker 只读 <context>/.dockerignore。
+
+# 虚拟环境与缓存（几百 MB，容器里会重新装）
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# 密钥：绝不能进镜像
+.env
+.env.*
+!.env.example
+
+# 本地数据：容器里应重新生成，不能把宿主机的旧库打进去
+backend/portfolio_hub.db
+backend/portfolio_hub.db.bak*
+backend/chroma_db/
+*.db
+
+# 版本控制与 IDE
+.git/
+.gitignore
+.idea/
+
+# 与运行无关的开发资产
+eval/
+infra/
+大二上/
+
+# 文档（README 保留，运行时不需要但便于排查）
+!README.md
