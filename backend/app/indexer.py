@@ -6,7 +6,7 @@
 - id 用 {work_id}:{chunk_index}，两边能对上
 """
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from backend.app import models, vector_store
@@ -41,11 +41,3 @@ def index_work(db: Session, work: models.Work) -> int:
     db.commit()
 
     return len(chunks)
-
-
-def reindex_all(db: Session) -> list[tuple[int, str, int]]:
-    """重建全库索引，返回 [(work_id, title, 片段数), ...]。"""
-    report = []
-    for work in db.scalars(select(models.Work).order_by(models.Work.id)).all():
-        report.append((work.id, work.title, index_work(db, work)))
-    return report

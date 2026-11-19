@@ -38,6 +38,15 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         batch = texts[start : start + batch_size]
         vectors.extend(_embed_batch(batch))
 
+    # 维度守卫：换模型忘了改 embedding_dim 时，这里立刻报错，
+    # 而不是等到写进 Chroma 才因为维度不匹配炸掉
+    actual = len(vectors[0])
+    if actual != settings.embedding_dim:
+        raise ValueError(
+            f"向量维度不符：模型返回 {actual} 维，配置 embedding_dim={settings.embedding_dim}。"
+            f"换过 embedding 模型就必须同步改 .env 并重建向量库。"
+        )
+
     return vectors
 
 

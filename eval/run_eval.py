@@ -20,11 +20,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from backend.app import crud, models, schemas, vector_store  # noqa: E402
-from backend.app.database import SessionLocal, init_db  # noqa: E402
-from backend.app.embedding import embed_text  # noqa: E402
-from backend.app.indexer import index_work  # noqa: E402
-from backend.app.main import MAX_DISTANCE, RETRIEVAL_TOP_K  # noqa: E402
+from backend.app import crud, schemas, vector_store
+from backend.app.database import SessionLocal, init_db
+from backend.app.embedding import embed_text
+from backend.app.indexer import index_work
+from backend.app.main import MAX_DISTANCE, RETRIEVAL_TOP_K
 
 EVAL_DIR = ROOT / "eval"
 
@@ -88,7 +88,6 @@ def run() -> int:
             latencies.append((time.perf_counter() - t0) * 1000)
 
             relevant = [h for h in hits if h["distance"] <= MAX_DISTANCE]
-            got_titles = [id_to_title.get(h["work_id"], "?") for h in relevant]
             got_top5 = [id_to_title.get(h["work_id"], "?") for h in hits]
 
             if not expected_titles:

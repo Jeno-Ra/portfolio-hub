@@ -216,6 +216,17 @@ def _refusal_answer(db: Session, question: str) -> str:
     )
 
 
+def _retrieve(question: str) -> list[dict]:
+    """检索并按距离过滤。top-k 永远会凑满 k 条，不过滤会把无关作品也算进引用。"""
+    hits = vector_store.query(embed_text(question), top_k=RETRIEVAL_TOP_K)
+    return [hit for hit in hits if hit["distance"] <= MAX_DISTANCE]
+
+
+def _rag_context(db: Session, relevant: list[dict]) -> str:
+    """拼接送给模型的上下文：目录（知道库里有什么）+ 命中片段（答细节）。"""
+    return f"【作品目录】\n{_catalog(db)}\n\n【相关片段】\n{_chunks_context(relevant)}"
+
+
 # 最近一次检索命中的作品 id。用于解析「把刚才那个的标题改成 X」这类指代。
 # 单进程单用户的原型做法；多用户要改成按会话存（第 9 周）。
 LAST_HITS: list[int] = []
@@ -284,8 +295,10 @@ def _handle_management(
     if intent == "create":
         if not routed["title"]:
             return (
-                "要新增作品的话，请把标题一起说出来，"
-                "例如：记一条《茶室空镜》，内容是今天拍的素材。",
+                (
+                    "要新增作品的话，请把标题一起说出来，"
+                    "例如：记一条《茶室空镜》，内容是今天拍的素材。"
+                ),
                 [],
             )
         created = crud.create_work(
@@ -305,8 +318,10 @@ def _handle_management(
     targets = _resolve_targets(db, routed["target"])
     if not targets:
         return (
-            "没找到要操作的作品。可以给我标题关键词，"
-            "或者说「刚才那个」指代上一次检索到的作品。",
+            (
+                "没找到要操作的作品。可以给我标题关键词，"
+                "或者说「刚才那个」指代上一次检索到的作品。"
+            ),
             [],
         )
     if len(targets) > 1:
@@ -318,8 +333,10 @@ def _handle_management(
     if intent == "delete":
         if not confirm:
             return (
-                f"即将删除《{work.title}》(id={work.id})，该操作不可撤销，"
-                f"确认请再发一次并带上「确认删除」。",
+                (
+                    f"即将删除《{work.title}》(id={work.id})，该操作不可撤销，"
+                    f"确认请再发一次并带上「确认删除」。"
+                ),
                 [work.id],
             )
         vector_store.delete_work(work.id)
@@ -365,17 +382,12 @@ def ask(req: AskRequest, db: Session = Depends(get_db)):
         if sources:  # 让「刚才那个」也能指代刚操作过的作品
             LAST_HITS[:] = sources
     else:
-        # 1) 向量检索：只把最相关的几个片段交给模型
-        hits = vector_store.query(embed_text(req.question), top_k=RETRIEVAL_TOP_K)
-        # 再按距离过滤：top-k 永远会凑满 k 条，不过滤会把无关作品也算进引用
-        relevant = [hit for hit in hits if hit["distance"] <= MAX_DISTANCE]
-
+        relevant = _retrieve(req.question)
         if not relevant:
             answer, sources = _refusal_answer(db, req.question), []
             LAST_HITS.clear()
         else:
-            context = f"【作品目录】\n{_catalog(db)}\n\n【相关片段】\n{_chunks_context(relevant)}"
-            answer = llm.chat(req.question, context)
+            answer = llm.chat(req.question, _rag_context(db, relevant))
             sources = list(dict.fromkeys(hit["work_id"] for hit in relevant))
             LAST_HITS[:] = sources  # 记住"刚才那几个"，供指代解析用
 
@@ -402,8 +414,7 @@ def ask_stream(req: AskRequest, db: Session = Depends(get_db)):
     说明：EventSource 只支持 GET 且不能带请求体，所以前端用 fetch + ReadableStream
     自己解析 SSE，而不是用浏览器的 EventSource。
     """
-    hits = vector_store.query(embed_text(req.question), top_k=RETRIEVAL_TOP_K)
-    relevant = [hit for hit in hits if hit["distance"] <= MAX_DISTANCE]
+    relevant = _retrieve(req.question)
     sources = list(dict.fromkeys(hit["work_id"] for hit in relevant))
 
     def generate():
@@ -413,14 +424,14 @@ def ask_stream(req: AskRequest, db: Session = Depends(get_db)):
             yield _sse("meta", {"sources": []})
             yield _sse("delta", {"text": answer})
         else:
-            context = f"【作品目录】\n{_catalog(db)}\n\n【相关片段】\n{_chunks_context(relevant)}"
+            context = _rag_context(db, relevant)
             yield _sse("meta", {"sources": sources})
             pieces: list[str] = []
             try:
                 for delta in llm.chat_stream(req.question, context):
                     pieces.append(delta)
                     yield _sse("delta", {"text": delta})
-            except Exception as exc:  # 流已开始，无法重试，只能明确报错
+            except Exception as exc:  # noqa: BLE001 — 流已开始无法重试，任何异常都只能转成 error 事件
                 yield _sse("error", {"message": f"生成中断：{exc}"})
                 return
             answer = "".join(pieces)

@@ -30,7 +30,6 @@ const modal = $("work-modal");
 
 const tplWork = $("tpl-work");
 const tplMessage = $("tpl-message");
-const tplTyping = $("tpl-typing");
 
 /* ---------- 统一请求封装 ---------- */
 async function api(path, options = {}) {

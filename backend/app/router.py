@@ -93,7 +93,7 @@ def route(question: str) -> dict:
     )
     try:
         raw = llm.raw_chat(ROUTER_SYSTEM, prompt)
-    except Exception:
+    except Exception:  # noqa: BLE001 — 分类失败必须降级成 search，不能把 500 抛给用户
         return dict(FALLBACK)
 
     data = _parse_json(raw)
@@ -120,7 +120,7 @@ def _parse_json(raw: str) -> dict | None:
     if not raw:
         return None
     text = raw.strip()
-    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
+    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
     if fence:
         text = fence.group(1).strip()
     start, end = text.find("{"), text.rfind("}")

@@ -32,3 +32,8 @@ dev = [
 # 让 `uv run pytest` 从项目根导入 backend 包（否则 ModuleNotFoundError: backend）
 pythonpath = ["."]
 testpaths = ["backend/tests"]
+
+[tool.ruff.lint]
+# B008：FastAPI 的 `db: Session = Depends(get_db)` 是官方标准写法，
+# 但 bugbear 规则会误报。关掉这一条，而不是给 8 个路由逐个加 noqa。
+extend-ignore = ["B008"]
