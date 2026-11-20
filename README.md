@@ -196,7 +196,7 @@ ipconfig | findstr IPv4
 - 插电时把电源计划设为不休眠，Docker Desktop 设成开机自启
 - 想 7×24 在线的话，把服务放到常开设备（旧手机/迷你主机/NAS）
 
-
+## 大模型调用的容错
 
 `/ask` 背后由 `backend/app/llm.py` 统一封装，三层保护：
 
@@ -210,6 +210,50 @@ ipconfig | findstr IPv4
 
 流式端点 `/ask/stream` **不重试**：流一旦开始输出，重试会让前端看到重复内容，
 所以失败时发一个 `error` 事件，让前端把气泡替换成明确的错误提示。
+
+## Android APP（Capacitor 外壳）
+
+`mobile/` 用 Capacitor 把 `frontend/` 打包成安卓 App。**它不是独立后端**：界面打包进 APK，数据仍然连你电脑上的服务。
+
+### 编译
+
+```bash
+cd mobile
+npm install            # 首次
+npm run build:apk      # 一条命令：复制前端 → 注入地址 → 同步 → 编译
+# 产物：app/build/outputs/apk/debug/app-debug.apk
+```
+
+### 前置环境
+
+| 需要 | 版本 | 说明 |
+| ---- | ---- | ---- |
+| JDK | **21** | Capacitor 8 要求；JDK 17 会报「无效的源发行版: 21」 |
+| Android SDK | platform 35+ / build-tools 35+ | `sdkmanager` 安装 |
+| Gradle | 8.x（wrapper 自带） | 国内换镜像 `mirrors.cloud.tencent.com/gradle/` |
+
+本机实际配置：
+
+```
+JAVA_HOME        F:\Android\jdk21\jdk-21.0.13+9
+ANDROID_HOME     F:\Android\sdk
+GRADLE_USER_HOME F:\Android\gradle
+```
+
+### 后端地址是编译期写死的
+
+`mobile/sync-web.mjs` 里改 `API_BASE`（默认 `http://10.13.36.143:8000`），重新编译生效。
+APK 通过 `window.PORTFOLIO_API` 拿到地址；网页端仍用同源相对路径——**同一份前端代码两处都能用**。
+
+另外 APK 需要允许明文 HTTP（`android:usesCleartextTraffic="true"`，已配），否则 Android 9+ 会拦掉 `http://` 请求。
+
+### 安装到手机
+
+1. 把 `mobile/dist/PortfolioHub-debug.apk` 传到手机（数据线 / 微信文件传输）
+2. 点击安装，允许「未知来源」
+3. **手机和电脑连同一个 WiFi**，且电脑上 `docker compose up -d` 在跑
+
+打开后是全屏界面（无浏览器地址栏），功能与网页版一致。
 
 ## 已知取舍
 

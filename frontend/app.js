@@ -4,7 +4,10 @@
    绝不拼接 HTML 字符串，绝不使用 innerHTML 注入数据。
    ============================================================ */
 
-const API = ""; // 同源：页面从哪来，请求就发到哪（手机访问时才连得到后端）
+// 同源：页面从哪来，请求就发到哪（手机浏览器访问时靠这个连到后端）。
+// APK 里页面是从本地加载的，同源会指向手机自己，所以 APK 构建时
+// 会注入 window.PORTFOLIO_API 写明电脑地址（见 mobile/sync-web.mjs）。
+const API = window.PORTFOLIO_API ?? "";
 
 const TYPE_LABEL = {
   video: "视频",

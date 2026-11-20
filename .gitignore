@@ -23,3 +23,16 @@ wheels/
 
 # 向量库数据（本地索引，可用 indexer 重建）
 backend/chroma_db/
+
+# ---- 移动端（Capacitor）----
+# 依赖与构建产物不入库；android/ 里的工程源码要入库，否则没法重建
+mobile/node_modules/
+mobile/www/
+mobile/dist/
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/local.properties
+mobile/android/capacitor-cordova-android-plugins/build/
+*.apk
+*.aab

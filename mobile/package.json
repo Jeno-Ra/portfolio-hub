@@ -1,0 +1,16 @@
+{
+  "name": "portfolio-hub-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "PortfolioHub Android 外壳（Capacitor）",
+  "scripts": {
+    "sync-web": "node sync-web.mjs",
+    "build:apk": "npm run sync-web && npx cap sync android && cd android && gradlew.bat assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/cli": "^8.6.2",
+    "@capacitor/core": "^8.6.2"
+  }
+}
