@@ -162,7 +162,41 @@ curl -s -X POST http://127.0.0.1:8000/ask -H 'Content-Type: application/json' \
 | `syntax error at or near "PRAGMA"` | `_ensure_columns()` 是 SQLite 方言 | 只在 SQLite 下执行（已加判断） |
 | `/health` 通了但容器其实在崩 | 宿主机还有别的进程占着 8000 | `Get-NetTCPConnection -LocalPort 8000` 先确认端口没被占 |
 
-## 大模型调用的容错
+## 多设备访问（手机 + 电脑共用一份库）
+
+后端**同源托管前端**，所以只有一个地址，不需要另起静态服务器：
+
+```
+http://<电脑地址>:8000      # 页面 + API 都在这个端口
+```
+
+### 方式一：局域网（同一 WiFi，最简单）
+
+```bash
+# 查电脑内网 IP（Windows）
+ipconfig | findstr IPv4
+# 手机浏览器打开
+# http://192.168.x.x:8000
+```
+
+需要放行 Windows 防火墙 8000 入站。部分校园网/公司网络开了 **AP 隔离**（设备之间互不可见），这种情况用方式二。
+
+### 方式二：Tailscale（出门/4G 也能用）
+
+1. 电脑和手机都安装 Tailscale，登录**同一个账号**
+2. 手机浏览器访问 `http://<电脑的 Tailscale 设备名>:8000`
+
+设备间走加密隧道，不暴露公网端口，也不受 AP 隔离影响。
+
+### 注意
+
+服务跑在电脑上，所以**电脑关机会连不上**。常见做法：
+
+- 需要时开机（最简单）
+- 插电时把电源计划设为不休眠，Docker Desktop 设成开机自启
+- 想 7×24 在线的话，把服务放到常开设备（旧手机/迷你主机/NAS）
+
+
 
 `/ask` 背后由 `backend/app/llm.py` 统一封装，三层保护：
 

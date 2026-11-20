@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from openai import (
     APIStatusError,
     AuthenticationError,
@@ -443,3 +444,15 @@ def ask_stream(req: AskRequest, db: Session = Depends(get_db)):
         yield _sse("done", {"conversation_id": conversation.id, "sources": sources})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# 前端静态托管。必须放在所有 API 路由之后：
+# FastAPI 先匹配已注册的路由，匹配不到才落到这个 mount，
+# 所以 /works、/ask、/docs 不会被它吃掉。
+#
+# 为什么同源托管：手机上访问时，"127.0.0.1" 指的是手机自己而不是电脑。
+# 前后端同源后前端用相对路径请求，一个地址（如 http://<电脑IP>:8000）就够，
+# 也不用再配 CORS。
+FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
+if FRONTEND_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
