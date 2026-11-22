@@ -1,16 +1,14 @@
 /**
- * 把 frontend/ 复制成 Capacitor 的 www/，并注入后端地址。
+ * 生成 Capacitor 的 www/：一份「连不上服务器」的兜底页 + 页面副本（备用）。
  *
- * 为什么需要这一步：
- * - 浏览器里前后端同源，前端用相对路径（API = ""）就行
- * - APK 里页面是从 file:/// 或 https://localhost 加载的，
- *   相对路径会指向手机自己，所以必须写死后端地址
+ * 现在的模式是「远程加载」：capacitor.config.json 里配了 server.url，
+ * App 启动时直接从后端拉页面。好处是改前端**不用重新装 APK**，
+ * 电脑上 rebuild 一次容器，手机刷新就是这个新界面。
  *
- * 地址通过 window.PORTFOLIO_API 注入（index.html 里插一段 script），
- * frontend/app.js 会优先读它。这样同一份前端代码两处都能用。
+ * www/ 里仍放一份 index.html 副本：万一以后要做离线版，改掉 server.url 就能用。
  */
 
-import { cp, readFile, writeFile, rm, mkdir } from "node:fs/promises";
+import { cp, writeFile, rm, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,12 +16,6 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const frontend = join(here, "..", "frontend");
 const www = join(here, "www");
-
-// 后端地址：改这里 → 重新 npm run build:apk
-// Tailscale（默认）：手机在任何网络下都能连，地址固定不变
-// 局域网（备用）：http://<电脑内网IP>:8000，只在同一 WiFi 下有效
-// 可用环境变量覆盖：$env:PORTFOLIO_API="http://x.x.x.x:8000"; npm run build:apk
-const API_BASE = process.env.PORTFOLIO_API || "http://100.126.133.63:8000";
 
 if (!existsSync(frontend)) {
   console.error("找不到 frontend/ 目录");
@@ -34,15 +26,54 @@ await rm(www, { recursive: true, force: true });
 await mkdir(www, { recursive: true });
 await cp(frontend, www, { recursive: true });
 
-// 在 app.js 之前插入后端地址
-const indexPath = join(www, "index.html");
-const html = await readFile(indexPath, "utf8");
-const inject = `<script>window.PORTFOLIO_API = ${JSON.stringify(API_BASE)};</script>\n  <script src="app.js"></script>`;
+// 兜底页：server.url 拉不到内容时 Capacitor 会显示这个文件（见 server.errorPath）
+const errorPage = `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>连不上作品集</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #0f1115;
+        color: #e6e8ee;
+        font: 15px/1.7 system-ui, "Microsoft YaHei", sans-serif;
+        padding: 24px;
+      }
+      .card { max-width: 420px; }
+      h1 { font-size: 18px; margin: 0 0 12px; }
+      p { color: #9aa3b2; margin: 0 0 8px; }
+      ul { color: #9aa3b2; padding-left: 20px; margin: 0 0 20px; }
+      code { color: #7c9cff; }
+      button {
+        padding: 10px 18px;
+        border: 0;
+        border-radius: 10px;
+        background: #4f7cff;
+        color: #fff;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>连不上电脑上的作品集</h1>
+      <p>这个 App 的界面和接口都在你自己的电脑上，按顺序检查：</p>
+      <ul>
+        <li>手机上的 <code>Tailscale</code> 开着且已登录</li>
+        <li>电脑开着，Docker Desktop 在跑（三个容器 healthy）</li>
+        <li>电脑上的 <code>Tailscale</code> 也开着</li>
+      </ul>
+      <p>改完点下面的按钮重试。</p>
+      <button onclick="location.reload()">重试</button>
+    </div>
+  </body>
+</html>
+`;
 
-if (!html.includes('<script src="app.js"></script>')) {
-  console.error('index.html 里没找到 <script src="app.js"></script>，注入失败');
-  process.exit(1);
-}
-
-await writeFile(indexPath, html.replace('<script src="app.js"></script>', inject), "utf8");
-console.log(`www/ 已生成，后端地址 = ${API_BASE}`);
+await writeFile(join(www, "error.html"), errorPage, "utf8");
+console.log("www/ 已生成（远程加载模式，兜底页 error.html）");

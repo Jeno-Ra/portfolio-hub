@@ -47,6 +47,20 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def fresh_frontend(request: Request, call_next):
+    """HTML 每次都回源校验。
+
+    前端是 StaticFiles 直接吐出去的，浏览器会把 index.html 也缓存住；
+    改完界面再点「新增」还是旧 JS，表现就是"点了没反应"。这里让 HTML 每次
+    都重新验证，静态资源则靠 index.html 里的 ?v= 版本号打破缓存。
+    """
+    response = await call_next(request)
+    if response.headers.get("content-type", "").startswith("text/html"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
+
 @app.exception_handler(APIStatusError)
 async def upstream_error_handler(request: Request, exc: APIStatusError):
     """把上游大模型服务的错误翻译成合适的 HTTP 语义。

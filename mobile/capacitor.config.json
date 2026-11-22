@@ -1,5 +1,10 @@
 {
   "appId": "com.jenora.portfolio",
   "appName": "作品集",
-  "webDir": "www"
+  "webDir": "www",
+  "server": {
+    "url": "http://100.126.133.63:8000",
+    "cleartext": true,
+    "errorPath": "error.html"
+  }
 }

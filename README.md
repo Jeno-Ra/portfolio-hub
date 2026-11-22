@@ -322,14 +322,18 @@ python desktop/make_icon.py     # 需要 Pillow，输出 16/32/48/64/128/256 六
 
 ## Android APP（Capacitor 外壳）
 
-`mobile/` 用 Capacitor 把 `frontend/` 打包成安卓 App。**它不是独立后端**：界面打包进 APK，数据仍然连你电脑上的服务。
+`mobile/` 用 Capacitor 把页面装进安卓 App。**它不是独立后端**：数据仍然连你电脑上的服务。
+
+> **界面是远程加载的**：`capacitor.config.json` 里配了 `server.url`，App 启动时直接从后端拉页面。
+> 所以改前端（界面、交互）**不用重新装 APK**——电脑上 `docker compose up -d --build` 重建一次，
+> 手机退到桌面再打开，就是新界面。只有改原生层（包名、图标、权限、App 名字）才需要重编重装。
 
 ### 编译
 
 ```bash
 cd mobile
 npm install            # 首次
-npm run build:apk      # 一条命令：复制前端 → 注入地址 → 同步 → 编译
+npm run build:apk      # 一条命令：生成 www/ 兜底页 → cap sync → gradle 编译
 # 产物：app/build/outputs/apk/debug/app-debug.apk
 ```
 
@@ -349,19 +353,24 @@ ANDROID_HOME     F:\Android\sdk
 GRADLE_USER_HOME F:\Android\gradle
 ```
 
-### 后端地址是编译期写死的
+### 后端地址与「不用重装」模式
 
-`mobile/sync-web.mjs` 里改 `API_BASE`（默认 `http://100.126.133.63:8000`，即本机的 Tailscale 地址），重新编译生效。
-也可以用环境变量临时覆盖，不用改代码：
+地址只写在 `mobile/capacitor.config.json` 的 `server.url`（默认 `http://100.126.133.63:8000`，本机的 Tailscale 地址）：
 
-```bash
-$env:PORTFOLIO_API = "http://10.13.36.143:8000"   # 临时用局域网地址
-npm run build:apk
+```json
+"server": {
+  "url": "http://100.126.133.63:8000",
+  "cleartext": true,
+  "errorPath": "error.html"
+}
 ```
 
-APK 通过 `window.PORTFOLIO_API` 拿到地址；网页端仍用同源相对路径——**同一份前端代码两处都能用**。
+- 想换地址（比如改用局域网）只改这一行，再 `npm run build:apk` 一次；
+- `errorPath` 指向 `www/error.html` 兜底页：连不上时会告诉你检查 Tailscale / Docker，而不是白屏；
+- 远程加载的副作用是**必须先连上后端**才能看到界面（这本来也是唯一的用法），
+  真要离线看，把 `server` 整段删掉重编即可退回「界面打包进 APK」的老模式。
 
-另外 APK 需要允许明文 HTTP（`android:usesCleartextTraffic="true"`，已配），否则 Android 9+ 会拦掉 `http://` 请求。
+APK 需要允许明文 HTTP（`android:usesCleartextTraffic="true"`，已配），否则 Android 9+ 会拦掉 `http://` 请求。
 
 ### App 名字与图标文字
 
@@ -378,11 +387,12 @@ mobile/android/app/src/main/res/values/strings.xml
 
 ### 安装到手机
 
-1. 把 `mobile/dist/PortfolioHub-debug.apk`（桌面上的 `作品集-手机安装.apk`）传到手机（数据线 / 微信文件传输）
+1. 把 `mobile/dist/作品集-手机安装.apk`（桌面上的同名文件）传到手机（数据线 / 微信文件传输）
 2. 点击安装，允许「未知来源」；装了旧版会提示覆盖
 3. 手机开着 Tailscale、电脑上 `docker compose up -d` 在跑，就能用——**不需要同一个 WiFi**
 
 打开后是全屏界面（无浏览器地址栏），功能与网页版一致。
+**装完这一版之后，日常改界面（按钮、排版、新功能）都不再需要重装 APK。**
 
 ## 已知取舍
 
@@ -392,3 +402,4 @@ mobile/android/app/src/main/res/values/strings.xml
 | 切片 500 字 + 50 字重叠 | 重叠是为了避免语义被切断在边界 |
 | 距离阈值 0.45 是实测校准值 | 相关 0.320–0.384，无关 0.510–0.654；作品量变大后需重新校准 |
 | 「刚才那个」指代用进程内变量 | 单用户原型够用；多用户要改成按会话存储 |
+| App 界面远程加载 | 换来「改前端不用重装 APK」；代价是没连上后端时只有兜底页 |
