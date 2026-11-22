@@ -21,6 +21,8 @@ const state = {
   works: [],
   filter: "all",
   editingId: null,
+  files: [], // 新增时待上传的文件（File 对象）
+  cover: null, // 视频封面（单个 File）
 };
 
 const $ = (id) => document.getElementById(id);
@@ -36,10 +38,14 @@ const tplMessage = $("tpl-message");
 
 /* ---------- 统一请求封装 ---------- */
 async function api(path, options = {}) {
+  // 上传文件时不能手动设 Content-Type：浏览器要自己拼 multipart 的 boundary
+  const isForm = options.body instanceof FormData;
+  const headers = isForm ? options.headers : { "Content-Type": "application/json", ...options.headers };
+
   const res = await fetch(API + path, {
-    headers: { "Content-Type": "application/json" },
     cache: "no-store", // 禁用缓存：否则新增后重新拉取可能拿到旧响应
     ...options,
+    headers,
   });
 
   if (res.status === 204) return null;
@@ -131,16 +137,135 @@ filtersEl.addEventListener("click", (event) => {
 });
 
 /* ---------- 新增 / 编辑弹窗 ---------- */
+
+// 按扩展名猜类型，省得每拖一个文件都手动选下拉框
+const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "webp", "gif", "bmp", "heic"]);
+const VIDEO_EXT = new Set(["mp4", "mov", "mkv", "avi", "webm"]);
+const CODE_EXT = new Set([
+  "py", "js", "ts", "tsx", "jsx", "java", "cpp", "c", "h", "go",
+  "rs", "rb", "php", "css", "scss", "sh", "ps1", "sql", "html",
+]);
+
+function extOf(name) {
+  const dot = name.lastIndexOf(".");
+  return dot < 0 ? "" : name.slice(dot + 1).toLowerCase();
+}
+
+function stemOf(name) {
+  const dot = name.lastIndexOf(".");
+  return dot <= 0 ? name : name.slice(0, dot);
+}
+
+function inferType(name) {
+  const ext = extOf(name);
+  if (IMAGE_EXT.has(ext)) return "image";
+  if (VIDEO_EXT.has(ext)) return "video";
+  if (CODE_EXT.has(ext)) return "code";
+  return "text";
+}
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// 列表项一律用 textContent 构造（文件名来自用户，不能当 HTML）
+function fileItem(file, onRemove) {
+  const li = document.createElement("li");
+  li.className = "filelist__item";
+
+  const name = document.createElement("span");
+  name.className = "filelist__name";
+  name.textContent = file.name;
+  name.title = file.name;
+
+  const size = document.createElement("span");
+  size.className = "filelist__size";
+  size.textContent = fmtSize(file.size);
+
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "filelist__del";
+  del.textContent = "×";
+  del.title = "移除";
+  del.addEventListener("click", onRemove);
+
+  li.append(name, size, del);
+  return li;
+}
+
+function renderFiles() {
+  $("filelist").replaceChildren(
+    ...state.files.map((file, index) =>
+      fileItem(file, () => {
+        state.files.splice(index, 1);
+        if (state.files.length === 0) {
+          state.titleAuto = false;
+        }
+        renderFiles();
+      }),
+    ),
+  );
+
+  $("coverlist").replaceChildren(
+    ...(state.cover
+      ? [
+          fileItem(state.cover, () => {
+            state.cover = null;
+            renderFiles();
+          }),
+        ]
+      : []),
+  );
+}
+
+function addFiles(incoming) {
+  const before = state.files.length;
+
+  for (const file of incoming) {
+    if (!file) continue;
+    // 同名同大小视为重复，拖两遍不会加两条
+    const dup = state.files.some((x) => x.name === file.name && x.size === file.size);
+    if (!dup) state.files.push(file);
+  }
+
+  if (state.files.length === before) return;
+
+  // 刚好一个文件：类型和标题跟着它走（标题留空才自动填，用户改过就不再覆盖）
+  // 多个文件：标题清空，后端按各自文件名取，避免变成"a·b"这种串味标题
+  if (state.files.length === 1) {
+    $("work-type").value = inferType(state.files[0].name);
+    if (!$("work-title").value.trim()) {
+      $("work-title").value = stemOf(state.files[0].name);
+      state.titleAuto = true;
+    }
+  } else if (state.titleAuto) {
+    $("work-title").value = "";
+    state.titleAuto = false;
+  }
+
+  syncIngestFields();
+  renderFiles();
+}
+
 function syncIngestFields() {
-  // 只有"新增"才显示文件路径；封面只在视频类型下出现
+  // 只有"新增"才显示文件区；封面只在视频类型下出现
   const creating = !state.editingId;
   const isVideo = $("work-type").value === "video";
-  $("field-file").hidden = !creating;
+  const hasFiles = state.files.length > 0;
+  $("field-files").hidden = !creating;
   $("field-cover").hidden = !creating || !isVideo;
+
+  // 有文件时正文由解析结果生成，这个输入框只起"备注"作用（备注会拼在正文最前面）
+  $("content-label").textContent = hasFiles || isVideo ? "备注（可选）" : "内容";
 }
 
 function openModal(work = null) {
   state.editingId = work ? work.id : null;
+  state.files = [];
+  state.cover = null;
+  state.titleAuto = false;
   $("modal-title").textContent = work ? "编辑作品" : "新增作品";
   $("work-id").value = work ? String(work.id) : "";
   $("work-title").value = work ? work.title : "";
@@ -149,15 +274,112 @@ function openModal(work = null) {
   $("work-tags").value = work ? (work.tags ?? []).join(", ") : "";
   $("work-file").value = "";
   $("work-cover").value = "";
+  renderFiles();
   syncIngestFields();
 
   modal.showModal();
   $("work-title").focus();
 }
 
+/* ---------- 拖拽 / 点选文件 ---------- */
+const dropzone = $("dropzone");
+const fileInput = $("work-file");
+const coverZone = $("dropzone-cover");
+const coverInput = $("work-cover");
+
+function markZone(el, active) {
+  el.classList.toggle("dropzone--active", active);
+}
+
+dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    fileInput.click();
+  }
+});
+fileInput.addEventListener("change", () => {
+  addFiles([...fileInput.files]);
+  fileInput.value = ""; // 清空后才能再次选同一个文件
+});
+
+coverZone.addEventListener("click", () => coverInput.click());
+coverInput.addEventListener("change", () => {
+  state.cover = coverInput.files[0] ?? null;
+  coverInput.value = "";
+  renderFiles();
+});
+
+for (const zone of [dropzone, coverZone]) {
+  zone.addEventListener("dragenter", (event) => {
+    event.preventDefault();
+    markZone(zone, true);
+  });
+  zone.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    markZone(zone, true);
+  });
+  zone.addEventListener("dragleave", () => markZone(zone, false));
+  zone.addEventListener("drop", (event) => {
+    event.preventDefault();
+    event.stopPropagation(); // 别再触发 window 上的兜底 drop
+    markZone(zone, false);
+    const dropped = [...(event.dataTransfer?.files ?? [])];
+
+    if (zone === coverZone) {
+      state.cover = dropped.find((f) => f.type.startsWith("image/")) ?? dropped[0] ?? state.cover;
+      renderFiles();
+    } else {
+      addFiles(dropped);
+    }
+  });
+}
+
+// 拖到窗口任意位置都能加：弹窗没开就先打开
+window.addEventListener("dragover", (event) => {
+  if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
+});
+window.addEventListener("drop", (event) => {
+  if (!event.dataTransfer?.types?.includes("Files")) return;
+  event.preventDefault();
+  if (!modal.open) openModal();
+  addFiles([...event.dataTransfer.files]);
+});
+
 $("work-type").addEventListener("change", syncIngestFields);
 $("btn-new").addEventListener("click", () => openModal());
 $("btn-cancel").addEventListener("click", () => modal.close());
+
+/* 逐个上传：一次拖 5 个文件 → 5 条作品，每条各自解析 */
+async function uploadFiles({ title, type, tags, notes }) {
+  const total = state.files.length;
+  const saveBtn = $("btn-save");
+  let done = 0;
+
+  for (const file of state.files) {
+    const form = new FormData();
+    form.append("file", file);
+    // 单文件用表单里的标题/类型；多文件时每条按自己的文件名和扩展名来
+    form.append(
+      "title",
+      total === 1 ? title : title ? `${title}·${stemOf(file.name)}` : stemOf(file.name),
+    );
+    form.append("type", total === 1 ? type : inferType(file.name));
+    form.append("tags", tags.join(","));
+    form.append("notes", notes);
+    if (total === 1 && state.cover) form.append("cover", state.cover);
+
+    saveBtn.textContent = `处理中 ${done + 1}/${total}…`;
+    try {
+      await api("/works/upload", { method: "POST", body: form });
+    } catch (err) {
+      throw new Error(
+        done > 0 ? `已上传 ${done} 条，第 ${done + 1} 条失败：${err.message}` : err.message,
+      );
+    }
+    done += 1;
+  }
+}
 
 $("work-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -171,11 +393,10 @@ $("work-form").addEventListener("submit", async (event) => {
       .map((s) => s.trim())
       .filter(Boolean),
   };
-  const filePath = $("work-file").value.trim();
-  const coverPath = $("work-cover").value.trim();
 
-  if (!payload.title) {
-    toast("标题不能为空");
+  // 有文件时标题可以留空（后端按文件名兜底），纯手写作品则必须有标题
+  if (!state.editingId && state.files.length === 0 && !payload.title) {
+    toast("标题不能为空（或拖一个文件进来，标题会自动取文件名）");
     return;
   }
 
@@ -188,19 +409,12 @@ $("work-form").addEventListener("submit", async (event) => {
         method: "PATCH",
         body: JSON.stringify(payload),
       });
-    } else if (filePath) {
-      // 统一录入：后端按类型解析（图片生成描述 / PDF 读正文 / 视频只存元数据）
-      saveBtn.textContent = "解析中…";
-      await api("/works/ingest", {
-        method: "POST",
-        body: JSON.stringify({
-          path: filePath,
-          title: payload.title,
-          type: payload.type,
-          tags: payload.tags,
-          notes: payload.content,
-          cover_path: coverPath || null,
-        }),
+    } else if (state.files.length) {
+      await uploadFiles({
+        title: payload.title,
+        type: payload.type,
+        tags: payload.tags,
+        notes: payload.content,
       });
     } else {
       await api("/works", { method: "POST", body: JSON.stringify(payload) });

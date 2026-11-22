@@ -17,6 +17,7 @@ dependencies = [
     "pypdf>=7.1.0",
     "python-docx>=1.2.0",
     "python-dotenv>=1.2.4",
+    "python-multipart>=0.0.34",
     "python-pptx>=1.0.2",
     "sqlalchemy>=2.1.6",
     "striprtf>=0.0.35",

@@ -31,6 +31,8 @@ services:
     environment:
       # 覆盖 .env 里的默认值：数据落到挂载卷，而不是镜像内部
       DB_PATH: /app/data/portfolio_hub.db
+      # 浏览器上传的原件也放卷里，重建容器不丢（否则 media/ 会随镜像一起被替换）
+      MEDIA_DIR: /app/data/media
       # 关系库指向 postgres 服务（服务名即主机名）。
       # 密码与下面 postgres 的 POSTGRES_PASSWORD 读同一个变量，避免写死两处。
       DATABASE_URL: postgresql+psycopg://portfolio:${POSTGRES_PASSWORD:-portfolio_dev_password}@postgres:5432/portfolio

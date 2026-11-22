@@ -21,6 +21,7 @@
 | ---------------- | --------------------------------------------- |
 | `backend/app/`   | 路由 / 模型 / 数据层 / 检索 / 意图路由 / 权限策略 |
 | `backend/tests/` | 测试用例                                      |
+| `backend/media/` | 网页上传的文件副本（本地跑时的默认落点，不入库） |
 | `frontend/`      | 原生单页前端                                  |
 | `infra/`         | Dockerfile                                    |
 | `eval/`          | 评测语料、50 条评测集与评测脚本                |
@@ -36,12 +37,31 @@
 | GET    | `/works/{id}`       | 查询单个作品                                      |
 | PATCH  | `/works/{id}`       | 更新作品（内容变了自动重建索引）                  |
 | DELETE | `/works/{id}`       | 删除作品（同时清掉向量与切片）                    |
-| POST   | `/works/ingest`     | 从文件录入：图片/视频/PDF/docx/pptx/xlsx/text…    |
+| POST   | `/works/upload`     | **网页上传**：multipart 直接传文件，后端落盘后解析（推荐） |
+| POST   | `/works/ingest`     | 从服务器上的路径录入（脚本 / `docker cp` 场景）    |
 | POST   | `/ask`              | 提问：意图路由 → 检索 → 大模型，返回答案与引用     |
 | POST   | `/ask/stream`       | 同上，SSE 流式返回（meta → delta → done）         |
 
 `/works` 返回字段：`id` / `title` / `type` / `content` / `tags` / `source_path` / `created_at`。
 `tags` 传名字即可，服务端会自动建标签并在 `work_tags` 里建立关联。
+
+## 怎么加作品：拖进来就行
+
+网页里点「+ 新增」后，可以：
+
+- **把文件拖到虚线框里**（一次拖多个 = 一次建多条作品），或点框选文件；
+- **把文件直接拖到窗口任意位置**——弹窗会自动打开并带上这个文件；
+- 有文件时「标题」可以留空（自动取文件名）、「内容」变成「备注（可选）」，
+  备注会拼在解析出来的正文最前面。
+
+解析规则：图片交给视觉模型写描述，PDF / Word / PPT / Excel / 代码 / 纯文本抽取正文，
+视频只存元数据（可再传一张封面图，会补一句画面描述）。
+
+为什么不是「填一个本地文件路径」：浏览器出于安全拿不到 `<input type=file>` 的真实路径，
+所以网页只能把**文件本体**上传上来，后端存一份副本再解析。副本落在 `media/`
+（容器里是 `/app/data/media`），单个文件上限 512 MB。
+
+删除作品时只删这份副本；`source_path` 指向你磁盘上原始位置时**绝不删除原文件**。
 
 ## 问答是怎么走通的
 
@@ -83,6 +103,7 @@ cp .env.example .env
 | `GPT_BASE_URL`      |      | `https://api.openai.com/v1`| 可指向任意兼容中转                      |
 | `GPT_MODEL`         |      | `gpt-6.1-terra`            | 视觉模型名                              |
 | `POSTGRES_PASSWORD` |      | `portfolio_dev_password`   | 仅 docker compose 使用                  |
+| `MEDIA_DIR`         |      | `backend/media`            | 上传副本存放目录（容器里是 `/app/data/media`） |
 
 > `.env` 已写入 `.gitignore`，不会进入版本库；`.env.example` 只含变量名，可安全提交。
 

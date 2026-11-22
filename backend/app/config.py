@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     # 容器里由 compose 注入 /app/data/...，这样数据在命名卷里，重建容器不丢。
     db_path: str = ""
     chroma_dir: str = ""
+    # 浏览器上传的原件存在这里（图片/PDF 等）。留空 = backend/media。
+    media_dir: str = ""
 
     # 关系库连接串。留空 = 用本地 SQLite（开发默认）；
     # 容器里由 compose 注入 postgresql+psycopg://... 指向 postgres 服务。

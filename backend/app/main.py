@@ -2,7 +2,7 @@ import difflib
 import json
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +19,7 @@ from backend.app.database import get_db, init_db
 from backend.app.embedding import embed_text
 from backend.app.files import extract_text
 from backend.app.indexer import index_work
+from backend.app.models import Work
 from backend.app.schemas import (
     AskRequest,
     AskResponse,
@@ -27,6 +28,7 @@ from backend.app.schemas import (
     WorkResponse,
     WorkUpdate,
 )
+from backend.app.uploads import is_media_file, safe_name, save_upload
 from backend.app.vision import describe_image
 
 app = FastAPI(title="PortfolioHub API", version="0.1.0")
@@ -110,32 +112,26 @@ def _infer_type(path: Path) -> str:
     return "text"
 
 
-@app.post("/works/ingest", response_model=WorkResponse, status_code=201)
-def ingest_work(payload: IngestRequest, db: Session = Depends(get_db)):
-    """统一录入入口：按类型决定「内容」从哪来。
+def _content_for(
+    work_type: str, path: Path, notes: str, cover_path: Path | None = None
+) -> str:
+    """按类型产出「作品内容」。
 
     图片 → 视觉模型生成描述
     视频 → 只存元数据（手填 notes），给了封面则额外描述封面画面
-    PDF/文本/代码 → 解析正文
+    其余 → 解析正文（PDF / Word / 表格 / 代码 / 纯文本），手填 notes 拼在最前面
     """
-    path = Path(payload.path)
-    work_type = payload.type or _infer_type(path)
-    title = payload.title or path.stem
-    content = (payload.notes or "").strip()
-
     try:
         if work_type == "image":
-            content = describe_image(path)
-        elif work_type == "video":
-            # 规划里的边界：视频不做抽帧/转写，只记元数据
-            if payload.cover_path:
-                content = (
-                    f"{content}\n封面画面：{describe_image(payload.cover_path)}".strip()
-                )
-            if not content:
-                content = "（暂无描述）"
-        else:
-            content = extract_text(path)
+            return describe_image(path)
+        if work_type == "video":
+            content = notes.strip()
+            if cover_path:
+                content = f"{content}\n封面画面：{describe_image(cover_path)}".strip()
+            return content or "（暂无描述）"
+        text = extract_text(path)
+        note = notes.strip()
+        return f"{note}\n\n{text}" if note else text
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
@@ -144,15 +140,87 @@ def ingest_work(payload: IngestRequest, db: Session = Depends(get_db)):
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"文件解析失败：{exc}") from exc
 
+
+def _split_tags(raw: str) -> list[str]:
+    """逗号分隔的标签串 → 列表，中英文逗号都认。"""
+    return [part.strip() for part in raw.replace("，", ",").split(",") if part.strip()]
+
+
+def _store_work(
+    db: Session, *, title: str, work_type: str, content: str, tags: list[str], source: Path
+) -> Work:
     created = crud.create_work(
-        db,
-        WorkCreate(title=title, type=work_type, content=content, tags=payload.tags),
+        db, WorkCreate(title=title, type=work_type, content=content, tags=tags)
     )
-    created.source_path = str(path)
+    created.source_path = str(source)
     db.commit()
     db.refresh(created)
     index_work(db, created)
     return created
+
+
+@app.post("/works/upload", response_model=WorkResponse, status_code=201)
+def upload_work(
+    file: UploadFile = File(...),
+    cover: UploadFile | None = File(None),
+    title: str = Form(""),
+    type: str = Form(""),
+    tags: str = Form(""),
+    notes: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    """浏览器 / 手机上传录入：文件先落盘到 media/，再按类型解析。
+
+    为什么网页必须走这条：`<input type=file>` 只给文件内容，不给本地绝对路径，
+    所以"填路径"那种方式在浏览器里根本不成立。`/works/ingest` 留给服务器端场景
+    （docker cp 放进去的文件、批量脚本），两边解析逻辑是同一个 `_content_for`。
+    """
+    original = safe_name(file.filename or "")
+    try:
+        saved = save_upload(file)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    saved_cover: Path | None = None
+    try:
+        if cover is not None and cover.filename:
+            saved_cover = save_upload(cover)
+        work_type = type or _infer_type(saved)
+        content = _content_for(work_type, saved, notes, saved_cover)
+    except HTTPException:
+        # 解析失败就别留下垃圾文件
+        saved.unlink(missing_ok=True)
+        if saved_cover:
+            saved_cover.unlink(missing_ok=True)
+        raise
+
+    return _store_work(
+        db,
+        title=title.strip() or Path(original).stem,
+        work_type=work_type,
+        content=content,
+        tags=_split_tags(tags),
+        source=saved,
+    )
+
+
+@app.post("/works/ingest", response_model=WorkResponse, status_code=201)
+def ingest_work(payload: IngestRequest, db: Session = Depends(get_db)):
+    """按路径录入：文件已经在这台机器上时用（服务器/脚本），浏览器用 `/works/upload`。"""
+    path = Path(payload.path)
+    work_type = payload.type or _infer_type(path)
+    cover_path = Path(payload.cover_path) if payload.cover_path else None
+    content = _content_for(work_type, path, payload.notes or "", cover_path)
+
+    return _store_work(
+        db,
+        title=payload.title or path.stem,
+        work_type=work_type,
+        content=content,
+        tags=payload.tags,
+        source=path,
+    )
+
 
 
 @app.get("/works", response_model=list[WorkResponse])
@@ -180,9 +248,17 @@ def patch_work(work_id: int, data: WorkUpdate, db: Session = Depends(get_db)):
 
 @app.delete("/works/{work_id}", status_code=204)
 def remove_work(work_id: int, db: Session = Depends(get_db)):
-    if not crud.delete_work(db, work_id):
+    work = crud.get_work(db, work_id)
+    if work is None:
         raise HTTPException(status_code=404, detail="作品不存在")
+
+    source = Path(work.source_path) if work.source_path else None
+    crud.delete_work(db, work_id)
     vector_store.delete_work(work_id)  # 同步清掉向量，否则残留脏数据
+
+    # 只清 media/ 里我们自己存的那份副本；用户原始文件永远不碰
+    if source is not None and is_media_file(source):
+        source.unlink(missing_ok=True)
 
 
 def _catalog(db: Session, limit: int = 50) -> str:

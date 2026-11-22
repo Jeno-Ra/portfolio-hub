@@ -24,6 +24,9 @@ wheels/
 # 向量库数据（本地索引，可用 indexer 重建）
 backend/chroma_db/
 
+# 上传的原件副本（本地数据，不入库）
+backend/media/
+
 # ---- 移动端（Capacitor）----
 # 依赖与构建产物不入库；android/ 里的工程源码要入库，否则没法重建
 mobile/node_modules/

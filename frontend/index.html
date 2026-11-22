@@ -61,8 +61,8 @@
       <input type="hidden" id="work-id">
 
       <label class="field">
-        <span class="field__label">标题</span>
-        <input id="work-title" type="text" required maxlength="120">
+        <span class="field__label">标题 <span class="field__note">拖了文件可留空，自动取文件名</span></span>
+        <input id="work-title" type="text" maxlength="120">
       </label>
 
       <label class="field">
@@ -76,21 +76,32 @@
         </select>
       </label>
 
-      <label class="field">
-        <span class="field__label">内容</span>
+      <div class="field" id="field-content">
+        <span class="field__label" id="content-label">内容</span>
         <textarea id="work-content" rows="5"></textarea>
-      </label>
+      </div>
 
-      <!-- 新增时可用：填了文件路径就由后端解析（图片生成描述 / PDF 解析正文 / 视频只存元数据） -->
-      <label class="field" id="field-file" hidden>
-        <span class="field__label">文件路径（可选，会按类型自动解析）</span>
-        <input id="work-file" type="text" placeholder="例如 F:\素材\角色立绘.png 或 F:\素材\笔记.md">
-      </label>
+      <!-- 新增时：拖拽区 + 文件选择。浏览器拿不到本地绝对路径，
+           所以只能把文件本体传上来（后端落到 media/ 再解析） -->
+      <div class="field" id="field-files" hidden>
+        <span class="field__label">文件（拖进来或点击选择，可多选）</span>
+        <div class="dropzone" id="dropzone" role="button" tabindex="0">
+          <span class="dropzone__plus">+</span>
+          <span class="dropzone__main">拖文件到这里，或点击选择</span>
+          <span class="dropzone__sub">图片自动生成描述 · PDF/Word/Excel/代码自动解析正文 · 视频只存元数据</span>
+        </div>
+        <input id="work-file" type="file" multiple hidden>
+        <ul class="filelist" id="filelist"></ul>
+      </div>
 
-      <label class="field" id="field-cover" hidden>
-        <span class="field__label">视频封面路径（可选，会生成一句画面描述）</span>
-        <input id="work-cover" type="text" placeholder="例如 F:\素材\封面.png">
-      </label>
+      <div class="field" id="field-cover" hidden>
+        <span class="field__label">视频封面（可选，会生成一句画面描述）</span>
+        <div class="dropzone dropzone--sm" id="dropzone-cover" role="button" tabindex="0">
+          <span class="dropzone__main">点击选择封面图片</span>
+        </div>
+        <input id="work-cover" type="file" accept="image/*" hidden>
+        <ul class="filelist" id="coverlist"></ul>
+      </div>
 
       <label class="field">
         <span class="field__label">标签</span>

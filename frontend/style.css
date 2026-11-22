@@ -462,6 +462,10 @@ body {
   font-size: 12px;
 }
 
+.field__note {
+  color: #6b7280;
+}
+
 .field input,
 .field select,
 .field textarea {
@@ -487,6 +491,105 @@ body {
   gap: 8px;
   margin-top: 4px;
 }
+
+/* ---------- 拖拽上传 ---------- */
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 18px 12px;
+  border: 1.5px dashed var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--muted);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.dropzone:hover,
+.dropzone:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* 文件拖到上方时由 JS 加这个类高亮 */
+.dropzone--active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.dropzone--sm {
+  padding: 10px 12px;
+}
+
+.dropzone__plus {
+  color: var(--accent);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.dropzone__main {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.dropzone__sub {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.filelist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.filelist:empty {
+  display: none;
+}
+
+.filelist__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: 12px;
+}
+
+.filelist__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filelist__size {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.filelist__del {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.filelist__del:hover {
+  color: var(--type-project);
+}
+
 
 /* ---------- 滚动条（深色下的必要修饰） ---------- */
 .work-list::-webkit-scrollbar,
