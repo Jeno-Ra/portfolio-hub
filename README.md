@@ -252,6 +252,53 @@ tailscale ping 100.86.250.22
 流式端点 `/ask/stream` **不重试**：流一旦开始输出，重试会让前端看到重复内容，
 所以失败时发一个 `error` 事件，让前端把气泡替换成明确的错误提示。
 
+## 桌面客户端（Windows）
+
+不想每次开浏览器敲网址，就在桌面放一个「作品集」图标：双击 → 独立窗口打开，没有地址栏、没有标签页。
+
+### 安装一次
+
+```powershell
+powershell -ExecutionPolicy Bypass -File desktop\install-shortcut.ps1
+```
+
+会在**桌面**和**开始菜单**各建一个快捷方式（换电脑或重装系统后重跑一次）。
+
+### 双击之后发生了什么
+
+`desktop/启动作品集.ps1` 做三件事：
+
+1. 请求 `http://127.0.0.1:8000/health`
+2. 没起来就拉起 Docker Desktop → `docker compose up -d` → 轮询到健康（期间显示一个居中的等待小窗）
+3. 用 Edge 的 `--app` 模式开窗：`msedge.exe --app=http://127.0.0.1:8000/ --window-size=1320,880`
+
+实测冷启动（容器全停 → 双击 → 页面可用）：**14.8 秒**，其中 Docker 引擎本来就在跑的话只花容器启动那几秒。
+
+### 为什么不用 Electron / Tauri
+
+| 方案 | 体积 | 成本 |
+| ---- | ---- | ---- |
+| Edge `--app` | 0（系统自带 Edge） | 一个 40 行脚本 |
+| Electron | +150 MB 运行时 | 要维护 package.json、打包、签名 |
+| Tauri | +几 MB（用系统 WebView2） | 要装 Rust 工具链，编译链更长 |
+
+三者显示出来的都是同一个网页，区别只在“谁来渲染”和“要不要分发安装包”。
+自己一个人用、机器上本来就有 Edge，`--app` 是性价比最高的；真要做成能发给别人的 `.exe` 安装包，再上 Tauri。
+
+### 图标
+
+`desktop/app.ico` 由脚本生成（蓝色圆角方块 + 白色「作」，和前端主题色一致）：
+
+```bash
+python desktop/make_icon.py     # 需要 Pillow，输出 16/32/48/64/128/256 六个尺寸
+```
+
+### 局限
+
+- 用的是 Edge 的内核，所以 Edge 被卸载/改名就没法用（Windows 10/11 默认自带）
+- 窗口里没有浏览器菜单，前进后退快捷键仍然可用；要 DevTools 用 `F12`
+- 服务仍需电脑开着：手机端（APK/浏览器）通过 Tailscale 连的也是这台机器
+
 ## Android APP（Capacitor 外壳）
 
 `mobile/` 用 Capacitor 把 `frontend/` 打包成安卓 App。**它不是独立后端**：界面打包进 APK，数据仍然连你电脑上的服务。
