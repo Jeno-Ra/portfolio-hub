@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "PortfolioHub Android 外壳（Capacitor）",
+  "description": "作品集 Android 外壳（Capacitor）",
   "scripts": {
     "sync-web": "node sync-web.mjs",
     "build:apk": "npm run sync-web && npx cap sync android && cd android && gradlew.bat assembleDebug"

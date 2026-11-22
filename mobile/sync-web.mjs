@@ -20,9 +20,10 @@ const frontend = join(here, "..", "frontend");
 const www = join(here, "www");
 
 // 后端地址：改这里 → 重新 npm run build:apk
-// 局域网：http://<电脑内网IP>:8000
-// Tailscale：http://<设备名或 100.x 地址>:8000
-const API_BASE = process.env.PORTFOLIO_API || "http://10.13.36.143:8000";
+// Tailscale（默认）：手机在任何网络下都能连，地址固定不变
+// 局域网（备用）：http://<电脑内网IP>:8000，只在同一 WiFi 下有效
+// 可用环境变量覆盖：$env:PORTFOLIO_API="http://x.x.x.x:8000"; npm run build:apk
+const API_BASE = process.env.PORTFOLIO_API || "http://100.126.133.63:8000";
 
 if (!existsSync(frontend)) {
   console.error("找不到 frontend/ 目录");

@@ -1,4 +1,4 @@
-# PortfolioHub
+# 作品集（PortfolioHub）
 
 把散落在各处的作品（视频 / 图片 / 文本 / 代码）汇总成一个可检索、可自然语言管理的多模态作品集。
 
@@ -181,12 +181,53 @@ ipconfig | findstr IPv4
 
 需要放行 Windows 防火墙 8000 入站。部分校园网/公司网络开了 **AP 隔离**（设备之间互不可见），这种情况用方式二。
 
-### 方式二：Tailscale（出门/4G 也能用）
+### 方式二：Tailscale（出门/4G 也能用，推荐）
 
-1. 电脑和手机都安装 Tailscale，登录**同一个账号**
-2. 手机浏览器访问 `http://<电脑的 Tailscale 设备名>:8000`
+Tailscale 是一层自建虚拟组网：两台设备各装一个客户端、登录同一账号，就组成一个私有网络，
+彼此用固定的 `100.x.x.x` 地址互访。**不开公网端口**，也不受校园网 AP 隔离影响。
 
-设备间走加密隧道，不暴露公网端口，也不受 AP 隔离影响。
+实测本机配置：
+
+| 设备 | Tailscale 地址 |
+| ---- | -------------- |
+| 电脑 `desktop-qp94kil` | `100.126.133.63` |
+| 手机 `cet-al00` | `100.86.250.22` |
+
+步骤：
+
+```bash
+# 1. 电脑端：安装并登录（Windows 版 msi）
+winget install Tailscale.Tailscale   # 或从 tailscale.com/download 手动安装
+tailscale up                          # 浏览器里授权登录
+
+# 2. 手机端：装 Tailscale（应用商店/官网 APK），登录同一个账号
+
+# 3. 电脑上查自己的地址
+tailscale status
+# 100.126.133.63  desktop-qp94kil  Jeno-Ra@  windows
+
+# 4. 手机浏览器 / App 里填这个地址
+# http://100.126.133.63:8000
+```
+
+验证是不是真的通了（在电脑上跑）：
+
+```bash
+tailscale ping 100.86.250.22
+# 前两次可能显示 via DERP(sfo) —— 走中继，慢
+# 第 3 次变成 via 183.9.225.214:36418 —— 打洞成功，P2P 直连
+```
+
+实测延迟（`curl -N POST /ask/stream`）：
+
+| 路径 | 首字节 | 总耗时 |
+| ---- | ------ | ------ |
+| 本机 localhost | 115 ms | 133 ms |
+| 经 Tailscale 直连 | 292 ms | 320 ms |
+
+隧道额外开销约 180 ms，流式输出不受影响（`meta → delta → done` 照常逐字到达）。
+
+超过 3 台设备/团队用要付费，个人设备（手机+电脑）免费额度足够。
 
 ### 注意
 
@@ -242,16 +283,36 @@ GRADLE_USER_HOME F:\Android\gradle
 
 ### 后端地址是编译期写死的
 
-`mobile/sync-web.mjs` 里改 `API_BASE`（默认 `http://10.13.36.143:8000`），重新编译生效。
+`mobile/sync-web.mjs` 里改 `API_BASE`（默认 `http://100.126.133.63:8000`，即本机的 Tailscale 地址），重新编译生效。
+也可以用环境变量临时覆盖，不用改代码：
+
+```bash
+$env:PORTFOLIO_API = "http://10.13.36.143:8000"   # 临时用局域网地址
+npm run build:apk
+```
+
 APK 通过 `window.PORTFOLIO_API` 拿到地址；网页端仍用同源相对路径——**同一份前端代码两处都能用**。
 
 另外 APK 需要允许明文 HTTP（`android:usesCleartextTraffic="true"`，已配），否则 Android 9+ 会拦掉 `http://` 请求。
 
+### App 名字与图标文字
+
+显示名不在 `capacitor.config.json` 里生效，而是 Android 资源：
+
+```
+mobile/android/app/src/main/res/values/strings.xml
+  <string name="app_name">作品集</string>
+  <string name="title_activity_main">作品集</string>
+```
+
+改完必须重新 `npm run build:apk`（`cap sync` 不会改这个文件）。
+界面里的标题在 `frontend/index.html`（`<title>` 与 `.topbar__title`），两处都改了才是统一的名字。
+
 ### 安装到手机
 
-1. 把 `mobile/dist/PortfolioHub-debug.apk` 传到手机（数据线 / 微信文件传输）
-2. 点击安装，允许「未知来源」
-3. **手机和电脑连同一个 WiFi**，且电脑上 `docker compose up -d` 在跑
+1. 把 `mobile/dist/PortfolioHub-debug.apk`（桌面上的 `作品集-手机安装.apk`）传到手机（数据线 / 微信文件传输）
+2. 点击安装，允许「未知来源」；装了旧版会提示覆盖
+3. 手机开着 Tailscale、电脑上 `docker compose up -d` 在跑，就能用——**不需要同一个 WiFi**
 
 打开后是全屏界面（无浏览器地址栏），功能与网页版一致。
 
