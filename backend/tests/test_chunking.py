@@ -3,6 +3,8 @@
 运行：uv run pytest backend/tests/test_chunking.py -q
 """
 
+import itertools
+
 import pytest
 
 from backend.app.chunking import split_text
@@ -47,3 +49,22 @@ def test_text_without_punctuation_terminates():
 def test_invalid_overlap_rejected():
     with pytest.raises(ValueError):
         split_text("x" * 100, size=50, overlap=50)
+
+
+def test_chunks_rebuild_the_original_text():
+    """切片是原文的连续切片：按重叠拼回去必须逐字等于原文，不能丢字也不能重复。"""
+    chunks = split_text(LONG, size=500, overlap=50)
+    rebuilt = chunks[0]
+    for previous, current in itertools.pairwise(chunks):
+        shared = min(50, len(previous), len(current))
+        assert previous[-shared:] == current[:shared]
+        rebuilt += current[shared:]
+    assert rebuilt == LONG.strip()
+
+
+def test_cuts_at_sentence_end_when_available():
+    """窗口后 40% 内有句号就以句号结尾，不把句子拦腰截断。"""
+    text = "甲" * 400 + "。" + "乙" * 300
+    chunks = split_text(text, size=500, overlap=50)
+    assert chunks[0].endswith("。")
+    assert len(chunks[0]) <= 500
