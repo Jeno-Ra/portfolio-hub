@@ -31,25 +31,18 @@
 
 ## 架构
 
-```mermaid
-flowchart LR
-    client["网页 / 安卓 App / 桌面窗口"]
-    nginx["nginx :80<br/>反代 + SSE 不缓冲"]
-    api["FastAPI backend :8000<br/>信封 / 日志 / 路由"]
-    pg["PostgreSQL<br/>作品·标签·会话"]
-    chroma["Chroma<br/>向量 + 原文"]
-    media["media/ 上传副本（不检索）"]
-    llm["DeepSeek chat"]
-    emb["bge-m3<br/>SiliconFlow"]
-    vis["视觉模型"]
-
-    client -->|HTTP / SSE| nginx --> api
-    api --> pg
-    api --> chroma
-    api --> media
-    api -->|提问| llm
-    api -->|向量化| emb
-    api -->|图片描述| vis
+```
+浏览器 / 安卓 App / 桌面窗口
+      │  HTTP · SSE
+      ▼
+   nginx :80  ──────►  FastAPI :8000
+   （SSE 不缓冲）        │  信封 · 结构化日志 · 路由
+                        ├──►  PostgreSQL   作品 / 标签 / 会话
+                        ├──►  Chroma       向量 + 原文片段
+                        ├──►  media/      上传文件副本
+                        ├──►  DeepSeek     对话生成
+                        ├──►  bge-m3       问题向量化
+                        └──►  视觉模型      图片描述
 ```
 
 一次提问实际走的路径：
