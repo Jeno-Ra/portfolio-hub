@@ -49,12 +49,20 @@ const state = {
  */
 async function api(path, options = {}) {
   const isForm = options.body instanceof FormData;
-  const res = await fetch(path, {
-    ...options,
-    headers: isForm
-      ? options.headers
-      : { "Content-Type": "application/json", ...(options.headers || {}) },
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      ...options,
+      headers: isForm
+        ? options.headers
+        : { "Content-Type": "application/json", ...(options.headers || {}) },
+    });
+  } catch {
+    // 连不上：打包版最常见的情况是后台已经退出了，窗口还留着
+    throw new Error(
+      "连不上后端服务。打包版可能已经退出，重新双击「作品集」；用 Docker 跑的话先执行 docker compose up -d",
+    );
+  }
 
   let payload = null;
   try {
@@ -271,7 +279,14 @@ function renderDetail() {
 }
 
 async function openProject(id) {
-  state.project = await api(`/projects/${id}`);
+  try {
+    state.project = await api(`/projects/${id}`);
+  } catch (err) {
+    toast(err.message, true);
+    // 列表可能是过期的（比如别的设备删了这个项目），重新拉一遍
+    if (err.message.includes("不存在")) await loadProjects();
+    return;
+  }
   state.kind = "all";
   for (const chip of $("kind-filters").children) {
     chip.classList.toggle("chip--active", chip.dataset.kind === "all");
