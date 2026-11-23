@@ -278,6 +278,32 @@ tailscale ping 100.86.250.22
 - 插电时把电源计划设为不休眠，Docker Desktop 设成开机自启
 - 想 7×24 在线的话，把服务放到常开设备（旧手机/迷你主机/NAS）
 
+## 反向代理（80 端口）
+
+`docker compose up -d` 会多起一个 `nginx` 容器，把 `80` 接到 `backend:8000`，
+于是手机浏览器里只需要 `http://100.x.x.x/`，不用记端口号。
+
+配置在 `infra/nginx/default.conf`，四个关键点：
+
+| 配置 | 为什么 |
+| ---- | ------ |
+| `client_max_body_size 512m` | nginx 默认只放行 **1 MB**，拖一个几 MB 的视频就会 413。这里和后端 `uploads.MAX_BYTES` 对齐 |
+| `proxy_buffering off` | 开着缓冲时 SSE 会被攒够一个 buffer 才发，流式回答就变成"憋几秒整段蹦出来" |
+| `resolver 127.0.0.11` + `proxy_pass $backend_upstream` | 写死 `http://backend:8000` 会在 nginx 启动瞬间解析 DNS，后端没起就直接启动失败；用变量把解析推迟到每次请求 |
+| `proxy_read_timeout 300s` | 一次问答最长可能到 30 秒（LLM 总预算），默认 60 秒够但留足余量 |
+
+实测（经 80 端口）：
+
+| 项 | 结果 |
+| --- | --- |
+| `GET /health` | 200 |
+| `GET /` | 200，5981 字节（同源托管的前端） |
+| 流式问答 | 首字节 **0.181 s** / 总 1.165 s，30 个 delta（缓冲确实是关的） |
+| 上传 2 MB 文本 | 201（默认配置下这里会 413） |
+| `http://100.126.133.63/`（Tailscale 地址） | 200，5981 字节 |
+
+> ⚠️ RAGFlow 那套也占 80 端口，两者不能同时开。要用 RAGFlow 时先 `docker compose -p ragflow stop`。
+
 ## 大模型调用的容错
 
 `/ask` 背后由 `backend/app/llm.py` 统一封装，三层保护：

@@ -79,6 +79,20 @@ services:
       - chromadata:/data
     restart: "no"
 
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: portfolio-nginx
+    ports:
+      # 80 是"短地址"：手机浏览器只敲 http://100.x.x.x/ 就行。
+      # 注意 RAGFlow 那套也占 80，两者不能同时开。
+      - "80:80"
+    volumes:
+      - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_started
+    restart: "no"
+
 volumes:
   appdata:
   pgdata:
