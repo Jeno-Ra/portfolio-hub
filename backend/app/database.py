@@ -51,30 +51,10 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 def init_db() -> None:
     """建表；表已存在则跳过，不会删数据。
 
-    create_all 只建缺失的表，**不会给已存在的表加字段**，
-    所以新增列要在这里补一条 ALTER（SQLite 没有 IF NOT EXISTS）。
+    本项目不再靠 ALTER 补列：模型一旦变动（works → projects/assets 那次），
+    就是重建库，历史库没有迁移价值。真要长期演进，应该引入 Alembic。
     """
     Base.metadata.create_all(bind=engine)
-    if _is_sqlite:
-        _ensure_columns()
-
-
-def _ensure_columns() -> None:
-    """轻量迁移：给"老 SQLite 库"补上后加的列。
-
-    只在 SQLite 下执行（PRAGMA 是 SQLite 方言）：
-    - 老库是 SQLite 建的，建表时没有 source_path，升级到本版本才需要补
-    - Postgres 由 create_all 一次建全，不存在"缺列"的历史包袱
-    """
-    with engine.begin() as conn:
-        existing = {
-            row[1]
-            for row in conn.exec_driver_sql("PRAGMA table_info(works)").fetchall()
-        }
-        if "source_path" not in existing:
-            conn.exec_driver_sql(
-                "ALTER TABLE works ADD COLUMN source_path VARCHAR(500)"
-            )
 
 
 def get_db() -> Iterator[Session]:

@@ -1,8 +1,9 @@
 """应用入口：只负责组装——日志、中间件、路由挂载、前端静态托管。
 
 业务都在各自的模块里：
-- `works_api`   作品的增删改查与两种录入方式
-- `qa_api`      提问（检索回答 / 统计 / 改名删除）
+- `projects_api` 项目（容器）的增删改查、挂素材 / 摘素材
+- `assets_api`   素材的增删改查与两种录入方式
+- `qa_api`       提问（检索回答 / 统计 / 改名删除）
 - `settings_api` 密钥设置、探活、退出
 
 之前这些全堆在这一个文件里（750 行），改任何一块都要先在一屏之外找位置；
@@ -20,16 +21,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from backend.app import (
+    assets_api,
     logging_setup,
+    projects_api,
     qa_api,
     response,
     settings_api,
     user_config,
-    works_api,
 )
 from backend.app.config import IS_FROZEN
 from backend.app.database import init_db
 from backend.app.response import Envelope, ok
+from backend.app.uploads import MEDIA_DIR
 
 logging_setup.configure()
 
@@ -108,14 +111,21 @@ def health():
     return ok({"status": "ok", "version": app.version})
 
 
-app.include_router(works_api.router)
+app.include_router(projects_api.router)
+app.include_router(assets_api.router)
 app.include_router(qa_api.router)
 app.include_router(settings_api.router)
 
 
+# 上传的副本要能直接访问：项目封面、以后的素材预览都靠它。
+# 只暴露 media/ 这一层，用户原始文件不在这个目录里，所以不会被顺带暴露出去。
+MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
+
+
 # 前端静态托管。必须放在所有 API 路由之后：
 # FastAPI 先匹配已注册的路由，匹配不到才落到这个 mount，
-# 所以 /works、/ask、/docs 不会被它吃掉。
+# 所以 /projects、/assets、/ask、/docs 不会被它吃掉。
 #
 # 为什么同源托管：手机上访问时，"127.0.0.1" 指的是手机自己而不是电脑。
 # 前后端同源后前端用相对路径请求，一个地址（如 http://<电脑IP>:8000）就够，

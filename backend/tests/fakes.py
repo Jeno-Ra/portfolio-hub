@@ -15,6 +15,9 @@ CALLS: dict[str, int] = {"chat": 0, "chat_stream": 0, "raw_chat": 0, "embed": 0}
 
 REPLY = "金山岭段拍了 19 个镜头 [1]"
 
+# 图片走视觉模型时返回的描述（假实现，不真的看图）
+DESCRIPTION = "一张敌楼在晨雾里的照片，画面偏冷，右侧有长城的石阶。"
+
 
 def reset() -> None:
     FAKE_HITS.clear()
@@ -43,5 +46,28 @@ def fake_embed(text: str) -> list[float]:
     return [0.0] * 1024
 
 
+def fake_describe(path) -> str:
+    CALLS["vision"] = CALLS.get("vision", 0) + 1
+    return DESCRIPTION
+
+
 def fake_query(*args, **kwargs) -> list[dict]:
     return list(FAKE_HITS)
+
+
+def hit(
+    asset: dict,
+    text: str = "金山岭段 19 个镜头",
+    distance: float = 0.21,
+    chunk_index: int = 0,
+    projects: str = "王者无界嬴政",
+) -> dict:
+    """造一条检索命中。字段名跟 vector_store.query 的返回保持一致。"""
+    return {
+        "text": text,
+        "asset_id": asset["id"],
+        "chunk_index": chunk_index,
+        "title": asset["title"],
+        "projects": projects,
+        "distance": distance,
+    }

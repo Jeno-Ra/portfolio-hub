@@ -10,13 +10,16 @@ from backend.tests.conftest import body
 from backend.tests.fakes import CALLS, FAKE_HITS
 
 
-def make_hit(work_id: int, chunk_index: int, distance: float, **kwargs) -> dict:
+def make_hit(
+    asset_id: int, chunk_index: int, distance: float, **kwargs
+) -> dict:
     """构造一条检索命中；字段名必须与 vector_store.query 的返回一致。"""
     hit = {
         "text": "金山岭段 19 个镜头",
-        "work_id": work_id,
+        "asset_id": asset_id,
         "chunk_index": chunk_index,
         "title": "长城拍摄笔记",
+        "projects": "王者无界嬴政",
         "distance": distance,
     }
     hit.update(kwargs)
@@ -24,7 +27,7 @@ def make_hit(work_id: int, chunk_index: int, distance: float, **kwargs) -> dict:
 
 
 def test_retrieve_keeps_only_hits_within_threshold(monkeypatch):
-    """top-k 永远会凑满 k 条，所以必须按距离过滤，否则引用里会混进无关作品。"""
+    """top-k 永远会凑满 k 条，所以必须按距离过滤，否则引用里会混进无关素材。"""
     hits = [
         make_hit(1, 0, 0.100),
         make_hit(1, 1, 0.449),
@@ -37,7 +40,7 @@ def test_retrieve_keeps_only_hits_within_threshold(monkeypatch):
     kept = qa_api._retrieve("长城拍了什么")
 
     assert [hit["distance"] for hit in kept] == [0.100, 0.449, 0.450]
-    assert [hit["work_id"] for hit in kept] == [1, 1, 2]  # 原有顺序不能被重排
+    assert [hit["asset_id"] for hit in kept] == [1, 1, 2]  # 原有顺序不能被重排
 
 
 def test_retrieve_uses_top_k_and_question_vector(monkeypatch):
@@ -57,7 +60,7 @@ def test_retrieve_uses_top_k_and_question_vector(monkeypatch):
     assert seen["vector"] == [0.5] * 1024
 
 
-def test_all_hits_filtered_out_falls_back_to_refusal(client, sample_work):
+def test_all_hits_filtered_out_falls_back_to_refusal(client, sample_asset):
     """5 条命中但全部超阈值：等于没找到，不能调模型，也不能给引用。"""
     FAKE_HITS.extend(make_hit(999, index, 0.60) for index in range(5))
 
@@ -65,53 +68,56 @@ def test_all_hits_filtered_out_falls_back_to_refusal(client, sample_work):
 
     assert data["sources"] == []
     assert "没有找到" in data["answer"]
+    assert "王者无界嬴政" in data["answer"]  # 拒绝时也告诉用户库里有哪些项目
     assert CALLS["chat"] == 0
 
 
-def test_sources_dedup_chunks_of_same_work(client, sample_work):
-    """一条作品切成多片会同时命中，引用里只能出现一次。"""
+def test_sources_dedup_chunks_of_same_asset(client, sample_asset):
+    """一条素材切成多片会同时命中，引用里只能出现一次。"""
     other = body(
         client.post(
-            "/works",
+            "/assets",
             json={"title": "茶室空镜", "type": "text", "content": "午后茶室的空镜素材。"},
         )
     )
 
     FAKE_HITS.extend(
         [
-            make_hit(sample_work["id"], 0, 0.20),
-            make_hit(sample_work["id"], 1, 0.30),
+            make_hit(sample_asset["id"], 0, 0.20),
+            make_hit(sample_asset["id"], 1, 0.30),
             make_hit(other["id"], 0, 0.40),
         ]
     )
 
     data = body(client.post("/ask", json={"question": "长城那天的素材"}))
 
-    assert data["sources"] == [sample_work["id"], other["id"]]  # 去重且保序
+    assert [s["asset_id"] for s in data["sources"]] == [sample_asset["id"], other["id"]]  # 去重且保序
 
 
 def test_context_numbers_chunks_in_the_same_order_as_sources():
-    """上下文里的 [1] [2] 必须与 sources 顺序一致，否则回答会引用错作品。"""
+    """上下文里的 [1] [2] 必须与 sources 顺序一致，否则回答会引用错素材。"""
     hits = [
         make_hit(1, 0, 0.2, text="甲段内容"),
-        make_hit(2, 3, 0.3, title="茶室空镜", text="乙段内容"),
+        make_hit(2, 3, 0.3, title="茶室空镜", projects="", text="乙段内容"),
     ]
 
     context = qa_api._chunks_context(hits)
 
-    assert context.startswith("[1] 《长城拍摄笔记》第 0 段（距离 0.2）")
+    # 有项目时写成《项目 · 素材》，没项目时只写素材名
+    assert context.startswith("[1] 《王者无界嬴政 · 长城拍摄笔记》第 0 段（距离 0.2）")
     assert "[2] 《茶室空镜》第 3 段（距离 0.3）" in context
     assert "甲段内容" in context and "乙段内容" in context
 
 
-def test_rag_context_contains_catalog_and_chunks(client, sample_work):
-    """模型既要看到"库里有什么"（目录），也要看到"这段说了什么"（片段）。"""
+def test_rag_context_contains_catalog_and_chunks(client, sample_asset):
+    """模型既要看到"库里有什么"（项目目录），也要看到"这段说了什么"（片段）。"""
     from backend.app.database import SessionLocal
 
     with SessionLocal() as db:
-        context = qa_api._rag_context(db, [make_hit(sample_work["id"], 0, 0.2)])
+        context = qa_api._rag_context(db, [make_hit(sample_asset["id"], 0, 0.2)])
 
-    assert "【作品目录】" in context
-    assert "- [text] 长城拍摄笔记｜标签：拍摄、长城" in context
+    assert "【项目与素材】" in context
+    assert "【项目】王者无界嬴政" in context
+    assert "- [文本] 长城拍摄笔记｜标签：拍摄、长城" in context
     assert "【相关片段】" in context
     assert "金山岭段 19 个镜头" in context

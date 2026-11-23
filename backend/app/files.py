@@ -139,7 +139,9 @@ def _dispatch(file_path: Path, suffix: str) -> str:
 
 def _read_text(file_path: Path) -> str:
     raw = file_path.read_bytes()
-    for encoding in ("utf-8", "utf-8-sig", "gbk", "latin-1"):
+    # utf-8-sig 放第一个：Windows 记事本存的文件带 BOM，用 utf-8 解出来会留一个
+    # 看不见的 \ufeff 在正文开头，检索和展示时都会碍事
+    for encoding in ("utf-8-sig", "gbk", "latin-1"):
         try:
             return raw.decode(encoding)
         except UnicodeDecodeError:

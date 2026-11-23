@@ -1,4 +1,9 @@
 # ORM 数据模型：SQLAlchemy 2.x 声明式写法
+#
+# 两层结构：项目（Project）装素材（Asset），素材可以同时属于多个项目。
+# 为什么不是"作品带一个项目字段"：一个项目里通常有视频、图片、文本、音频，
+# 而这些素材的正文解析方式完全不同，必须各自成行才能分别解析、分别索引、分别引用。
+
 from datetime import datetime
 
 from sqlalchemy import (
@@ -18,69 +23,116 @@ class Base(DeclarativeBase):
     """所有模型的基类"""
 
 
-# 多对多关联表：作品<-->标签
-# 只有两个外键、没有业务字段，所以用 Table 而不是建类
-work_tags = Table(
-    "work_tags",
+# 多对多：素材 <--> 项目（同一份素材可以挂在多个项目下，比如两张项目共用的图）
+project_assets = Table(
+    "project_assets",
     Base.metadata,
-    Column("work_id", ForeignKey("works.id", ondelete="CASCADE"), primary_key=True),
+    Column("project_id", ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True),
+    Column("asset_id", ForeignKey("assets.id", ondelete="CASCADE"), primary_key=True),
+)
+
+# 多对多：素材 <--> 标签
+asset_tags = Table(
+    "asset_tags",
+    Base.metadata,
+    Column("asset_id", ForeignKey("assets.id", ondelete="CASCADE"), primary_key=True),
+    Column("tag_id", ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
+)
+
+# 多对多：项目 <--> 标签
+project_tags = Table(
+    "project_tags",
+    Base.metadata,
+    Column("project_id", ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True),
     Column("tag_id", ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
 )
 
 
-class Work(Base):
-    """作品主表：所有模态共用一张表，靠 type 区分"""
+class Project(Base):
+    """项目：一个作品的"总集"。标题、简介、封面，下面挂任意多个素材。"""
 
-    __tablename__ = "works"
+    __tablename__ = "projects"
 
-    id: Mapped[int] = mapped_column(primary_key=True)  # 主键，自增
-    title: Mapped[str] = mapped_column(String(120))  # 不带 Optional = NOT NULL
-    type: Mapped[str] = mapped_column(String(20), default="text", index=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(120))
+    summary: Mapped[str] = mapped_column(Text, default="")  # 简介/创作说明
+    cover_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    assets: Mapped[list["Asset"]] = relationship(
+        secondary=project_assets,
+        back_populates="projects",
+        order_by="Asset.id",
+    )
+    tags: Mapped[list["Tag"]] = relationship(
+        secondary=project_tags,
+        back_populates="projects",
+    )
+
+
+class Asset(Base):
+    """素材：图片 / 视频 / 音频 / 文本 / 代码 / 文档中的一条。
+
+    type 是内置分类（见 kinds.py），不是用户自定义标签；索引、解析、筛选都按它走。
+    """
+
+    __tablename__ = "assets"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(120))
+    type: Mapped[str] = mapped_column(String(20), default="", index=True)
     content: Mapped[str] = mapped_column(Text, default="")
-    # 原始文件路径（图片/视频/PDF 都记下来，用于溯源；文本类作品可以为空）
+    # 原始文件路径（上传副本或服务器上的原文件），用于溯源
     source_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
-    # 关系：一个作品有多个切片；删作品时切片跟着删
     chunks: Mapped[list["Chunk"]] = relationship(
-        back_populates="work",
+        back_populates="asset",
         cascade="all, delete-orphan",
     )
-    # 关系：作品<-->标签（经由 work_tags 中间表）
+    projects: Mapped[list["Project"]] = relationship(
+        secondary=project_assets,
+        back_populates="assets",
+    )
     tags: Mapped[list["Tag"]] = relationship(
-        secondary=work_tags,
-        back_populates="works",
+        secondary=asset_tags,
+        back_populates="assets",
     )
 
 
 class Chunk(Base):
-    """切片表：长文本按块切开后逐块做向量化"""
+    """切片表：素材正文按块切开后逐块做向量化"""
 
     __tablename__ = "chunks"
-    # 联合唯一约束：同一个作品里 chunk_index 不能重复
-    __table_args__ = (UniqueConstraint("work_id", "chunk_index"),)
+    __table_args__ = (UniqueConstraint("asset_id", "chunk_index"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    # index 是 mapped_column 的参数，不是 ForeignKey 的
-    work_id: Mapped[int] = mapped_column(
-        ForeignKey("works.id", ondelete="CASCADE"), index=True
+    asset_id: Mapped[int] = mapped_column(
+        ForeignKey("assets.id", ondelete="CASCADE"), index=True
     )
     content: Mapped[str] = mapped_column(Text)
-    chunk_index: Mapped[int] = mapped_column()  # 该切片在原作品中的序号，从 0 起
+    chunk_index: Mapped[int] = mapped_column()  # 该切片在原素材中的序号，从 0 起
 
-    work: Mapped["Work"] = relationship(back_populates="chunks")
+    asset: Mapped["Asset"] = relationship(back_populates="chunks")
 
 
 class Tag(Base):
-    """标签表"""
+    """标签表：项目与素材共用一张表，靠中间表区分挂在哪边"""
 
     __tablename__ = "tags"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(50), unique=True)  # 标签名不重复
+    name: Mapped[str] = mapped_column(String(50), unique=True)
 
-    works: Mapped[list["Work"]] = relationship(
-        secondary=work_tags,
+    assets: Mapped[list["Asset"]] = relationship(
+        secondary=asset_tags,
+        back_populates="tags",
+    )
+    projects: Mapped[list["Project"]] = relationship(
+        secondary=project_tags,
         back_populates="tags",
     )
 
@@ -107,7 +159,6 @@ class Message(Base):
     __tablename__ = "messages"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    # 注意：写表名 conversations.id（复数），和 __tablename__ 一致
     conversation_id: Mapped[int] = mapped_column(
         ForeignKey("conversations.id", ondelete="CASCADE"), index=True
     )

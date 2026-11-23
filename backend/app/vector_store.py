@@ -4,8 +4,8 @@
 - 这里只管「向量怎么存取和检索」
 - 不负责切片（chunking.py）、不负责调模型（embedding.py）、不负责写业务表（crud.py）
 
-集合只有一个：``works``，每条记录 = 一个片段。
-id 用 ``{work_id}:{chunk_index}``，这样删改单个作品时可以按前缀/元数据精确定位。
+集合只有一个：``assets``，每条记录 = 一个片段。
+id 用 ``{asset_id}:{chunk_index}``，这样删改单个素材时可以按元数据精确定位。
 """
 
 import time
@@ -19,7 +19,7 @@ from backend.app.config import settings
 _DEFAULT_CHROMA = Path(__file__).resolve().parent.parent / "chroma_db"
 CHROMA_DIR = Path(settings.chroma_dir) if settings.chroma_dir else _DEFAULT_CHROMA
 
-COLLECTION = "works"
+COLLECTION = "assets"
 
 
 def _build_client():
@@ -66,12 +66,12 @@ def get_collection():
 
 
 def upsert_chunks(
-    work_id: int,
+    asset_id: int,
     chunks: list[str],
     vectors: list[list[float]],
     meta: dict | None = None,
 ) -> int:
-    """写入一个作品的所有片段，返回写入条数。"""
+    """写入一个素材的所有片段，返回写入条数。"""
     if not chunks:
         return 0
     if len(chunks) != len(vectors):
@@ -80,30 +80,32 @@ def upsert_chunks(
     col = get_collection()
     base = meta or {}
     col.upsert(
-        ids=[f"{work_id}:{i}" for i in range(len(chunks))],
+        ids=[f"{asset_id}:{i}" for i in range(len(chunks))],
         documents=chunks,
         embeddings=vectors,
         metadatas=[
-            {**base, "work_id": work_id, "chunk_index": i} for i in range(len(chunks))
+            {**base, "asset_id": asset_id, "chunk_index": i}
+            for i in range(len(chunks))
         ],
     )
     return len(chunks)
 
 
-def delete_work(work_id: int) -> None:
-    """删除一个作品的全部片段（改内容前必须先删旧的，否则残留旧向量）。"""
-    get_collection().delete(where={"work_id": work_id})
+def delete_asset(asset_id: int) -> None:
+    """删除一个素材的全部片段（改内容前必须先删旧的，否则残留旧向量）。"""
+    get_collection().delete(where={"asset_id": asset_id})
 
 
 def query(
-    vector: list[float], top_k: int = 5, work_id: int | None = None
+    vector: list[float], top_k: int = 5, asset_id: int | None = None
 ) -> list[dict]:
-    """按向量检索，返回 [{text, work_id, chunk_index, title, distance}, ...]，距离越小越相关。"""
+    """按向量检索，返回 [{text, asset_id, chunk_index, title, projects, distance}, ...]，
+    距离越小越相关。"""
     col = get_collection()
     result = col.query(
         query_embeddings=[vector],
         n_results=top_k,
-        where={"work_id": work_id} if work_id is not None else None,
+        where={"asset_id": asset_id} if asset_id is not None else None,
     )
 
     hits: list[dict] = []
@@ -115,9 +117,10 @@ def query(
         hits.append(
             {
                 "text": text,
-                "work_id": meta.get("work_id"),
+                "asset_id": meta.get("asset_id"),
                 "chunk_index": meta.get("chunk_index"),
                 "title": meta.get("title"),
+                "projects": meta.get("projects") or "",
                 "distance": round(float(dist), 4),
             }
         )

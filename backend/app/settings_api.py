@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from backend.app import embedding, errors, indexer, llm, user_config, vision
 from backend.app.config import IS_FROZEN, settings
 from backend.app.database import get_db
-from backend.app.models import Work
+from backend.app.models import Asset
 from backend.app.response import Envelope, ok
 from backend.app.schemas import SettingsUpdate
 
@@ -38,7 +38,7 @@ def _reload_clients() -> None:
 
 
 def _reindex_all(db: Session) -> int:
-    """把库里所有作品重建索引，返回成功的条数。
+    """把库里所有素材重建索引，返回成功的条数。
 
     没配向量化密钥时直接返回 0，不报错——用户可能只填了对话密钥。
     """
@@ -46,12 +46,12 @@ def _reindex_all(db: Session) -> int:
         return 0
 
     done = 0
-    for work in db.query(Work).all():
+    for asset in db.query(Asset).all():
         try:
-            indexer.index_work(db, work)
+            indexer.index_asset(db, asset)
             done += 1
         except (errors.NotConfigured, RuntimeError):
-            break  # 密钥/网络有问题就停，别对着每条作品重复失败
+            break  # 密钥/网络有问题就停，别对着每条素材重复失败
     return done
 
 
@@ -89,10 +89,10 @@ def read_settings():
 
 @router.put("/settings", response_model=Envelope[dict])
 def update_settings(payload: SettingsUpdate, db: Session = Depends(get_db)):
-    """保存密钥 → 立刻生效 → 顺手把之前没索引成功的作品补上。
+    """保存密钥 → 立刻生效 → 顺手把之前没索引成功的素材补上。
 
-    补索引放在这里而不是后台任务：作品通常只有几条，同步做完再返回，
-    用户看到「已为 N 条作品建好索引」比等一个看不见的后台任务更安心。
+    补索引放在这里而不是后台任务：素材通常只有几条，同步做完再返回，
+    用户看到「已为 N 件素材建好索引」比等一个看不见的后台任务更安心。
     """
     updates = payload.model_dump(exclude_none=True)
     if not updates:
@@ -102,7 +102,7 @@ def update_settings(payload: SettingsUpdate, db: Session = Depends(get_db)):
     user_config.apply()
 
     indexed = _reindex_all(db)
-    message = f"已保存，为 {indexed} 条作品重建了索引"
+    message = f"已保存，为 {indexed} 件素材重建了索引"
     return ok({**_settings_payload(), "indexed_works": indexed}, message)
 
 

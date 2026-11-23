@@ -16,7 +16,7 @@ os.environ["DB_PATH"] = str(_TMP / "test.db")
 os.environ["MEDIA_DIR"] = str(_TMP / "media")
 os.environ["CHROMA_DIR"] = str(_TMP / "chroma")
 
-# 三个 key 在 config.py 里是必填项。测试全程不联网，给占位值就够——
+# 三个 key 在 config.py 里默认留空；测试全程不联网，给占位值就够——
 # 这样在没有 .env 的机器上（CI、别人的电脑）也能直接跑 pytest。
 os.environ["DEEPSEEK_API_KEY"] = "test-key"
 os.environ["EMBEDDING_API_KEY"] = "test-key"
@@ -26,7 +26,7 @@ MEDIA = _TMP / "media"
 
 import pytest
 
-from backend.app import embedding, indexer, llm, main, vector_store
+from backend.app import embedding, indexer, llm, main, vector_store, vision
 from backend.app.database import Base, engine
 from backend.tests import fakes
 
@@ -36,15 +36,16 @@ def offline(monkeypatch):
     """把一切外部依赖换成本地假实现，并保证每个用例从空库开始。"""
     fakes.reset()
 
-    # 假实现的补丁点跟着代码走：作品接口调 indexer.index_quietly，
+    # 假实现的补丁点跟着代码走：素材接口调 indexer.index_quietly，
     # 问答接口调 embedding.embed_text，都在各自模块里打补丁才有效果
-    monkeypatch.setattr(indexer, "index_work", lambda *a, **k: None)
+    monkeypatch.setattr(indexer, "index_asset", lambda *a, **k: None)
     monkeypatch.setattr(embedding, "embed_text", fakes.fake_embed)
     monkeypatch.setattr(llm, "chat", fakes.fake_chat)
     monkeypatch.setattr(llm, "chat_stream", fakes.fake_chat_stream)
     monkeypatch.setattr(llm, "raw_chat", fakes.fake_raw_chat)
+    monkeypatch.setattr(vision, "describe_image", fakes.fake_describe)
     monkeypatch.setattr(vector_store, "query", fakes.fake_query)
-    monkeypatch.setattr(vector_store, "delete_work", lambda *a, **k: None)
+    monkeypatch.setattr(vector_store, "delete_asset", lambda *a, **k: None)
 
     shutil.rmtree(MEDIA, ignore_errors=True)
     MEDIA.mkdir(parents=True, exist_ok=True)
@@ -77,15 +78,31 @@ def body(response):
 
 
 @pytest.fixture
-def sample_work(client):
-    """一条现成的作品，多数用例从这里起步。"""
+def sample_project(client):
+    """一个现成的项目（容器），素材用例都往它底下放。"""
     response = client.post(
-        "/works",
+        "/projects",
+        json={
+            "title": "王者无界嬴政",
+            "summary": "记录片项目，含预告、图片与文案",
+            "tags": ["商业", "记录片"],
+        },
+    )
+    assert response.status_code == 201
+    return body(response)
+
+
+@pytest.fixture
+def sample_asset(client, sample_project):
+    """一条现成的素材，挂在 sample_project 下。"""
+    response = client.post(
+        "/assets",
         json={
             "title": "长城拍摄笔记",
             "type": "text",
             "content": "金山岭段 19 个镜头，航拍 6 个，重点拍敌楼晨雾。",
             "tags": ["拍摄", "长城"],
+            "project_ids": [sample_project["id"]],
         },
     )
     assert response.status_code == 201

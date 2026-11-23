@@ -41,7 +41,7 @@ uv run python eval/run_eval.py
 `corpus.json` 现在是合成数据，**跑出的 1.00 只能证明链路和阈值是通的，不能写进简历**。
 换成自己的作品后重跑，那个数字才是真的：
 
-1. 把 `corpus.json` 的 `works` 换成你的真实作品（title / type / tags / content）
+1. 把 `corpus.json` 的 `assets` 换成你的真实素材（title / type / tags / content）
 2. 按你的作品改写 `questions.json`，`expected` 填真实存在的标题，`expected: []` 表示"库里应该没有"
 3. 重跑
 

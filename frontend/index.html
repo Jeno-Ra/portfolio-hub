@@ -3,41 +3,74 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>作品集 · 多模态作品管理</title>
+  <title>作品集 · 多模态项目与素材</title>
   <link
     rel="icon"
     href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f7cff'/%3E%3Ctext x='16' y='23' font-size='18' font-family='sans-serif' text-anchor='middle' fill='white'%3E作%3C/text%3E%3C/svg%3E"
   >
-  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
   <header class="topbar">
     <h1 class="topbar__title">作品集</h1>
-    <span class="topbar__hint">AI 作品管理 · 本地版</span>
+    <span class="topbar__hint">项目 / 素材 · AI 作品管理</span>
     <button id="btn-settings" type="button" class="btn btn--ghost topbar__settings">设置</button>
   </header>
 
   <main class="layout">
-    <!-- ===== 左栏：作品列表 ===== -->
+    <!-- ===== 左栏：项目列表 / 项目详情，两个视图来回切 ===== -->
     <aside class="panel panel--list">
-      <div class="panel__head">
-        <h2 class="panel__title">作品</h2>
-        <button id="btn-new" type="button" class="btn btn--primary">+ 新增</button>
+      <!-- ---------- 视图一：项目列表 ---------- -->
+      <div id="project-view">
+        <div class="panel__head">
+          <h2 class="panel__title">项目</h2>
+          <button id="btn-new-project" type="button" class="btn btn--primary">+ 新增项目</button>
+        </div>
+        <p class="panel__hint">
+          一个项目可以同时放图片、视频、音频、文本、代码、文档 —— 素材的解析方式自动判定。
+        </p>
+        <ul class="project-list" id="project-list"></ul>
+        <p class="empty" id="project-empty">
+          还没有项目。点「+ 新增项目」，先建一个容器（标题必填，其余都可留空）。
+        </p>
       </div>
 
-      <!-- 按 type 筛选。data-type 与后端 works.type 取值一致 -->
-      <nav class="filters" id="filters">
-        <button type="button" class="chip chip--active" data-type="all">全部</button>
-        <button type="button" class="chip" data-type="video">视频</button>
-        <button type="button" class="chip" data-type="image">图片</button>
-        <button type="button" class="chip" data-type="text">文本</button>
-        <button type="button" class="chip" data-type="code">代码</button>
-        <button type="button" class="chip" data-type="project">项目</button>
-      </nav>
+      <!-- ---------- 视图二：项目详情 ---------- -->
+      <div id="detail-view" hidden>
+        <div class="panel__head">
+          <button id="btn-back" type="button" class="btn btn--ghost">← 项目</button>
+          <button id="btn-new-asset" type="button" class="btn btn--primary">+ 添加素材</button>
+        </div>
 
-      <!-- 列表由 app.js 渲染，每个 li 内含标题 / 类型 / 标签 / 编辑按钮 -->
-      <ul class="work-list" id="work-list"></ul>
-      <p class="empty" id="work-empty">还没有作品，点右上角「新增」开始。</p>
+        <div class="detail-head">
+          <img id="detail-cover" class="detail-head__cover" alt="" hidden>
+          <div class="detail-head__text">
+            <h2 class="detail-head__title" id="detail-title"></h2>
+            <p class="detail-head__summary" id="detail-summary"></p>
+            <ul class="detail-head__tags" id="detail-tags"></ul>
+            <div class="detail-head__actions">
+              <button id="btn-edit-project" type="button" class="btn btn--ghost">编辑项目</button>
+              <button id="btn-del-project" type="button" class="btn btn--ghost">删除项目</button>
+            </div>
+          </div>
+        </div>
+
+        <p class="detail-count" id="detail-count"></p>
+
+        <!-- 素材按内置类型筛选；值是 kinds.py 里的类型码 -->
+        <nav class="filters" id="kind-filters">
+          <button type="button" class="chip chip--active" data-kind="all">全部</button>
+          <button type="button" class="chip" data-kind="image">图片</button>
+          <button type="button" class="chip" data-kind="video">视频</button>
+          <button type="button" class="chip" data-kind="audio">音频</button>
+          <button type="button" class="chip" data-kind="text">文本</button>
+          <button type="button" class="chip" data-kind="code">代码</button>
+          <button type="button" class="chip" data-kind="document">文档</button>
+        </nav>
+
+        <ul class="asset-list" id="asset-list"></ul>
+        <p class="empty" id="asset-empty">这个项目还没有素材，点「+ 添加素材」拖几个文件进来。</p>
+      </div>
     </aside>
 
     <!-- ===== 右栏：对话区 ===== -->
@@ -55,63 +88,78 @@
     </section>
   </main>
 
-  <!-- ===== 新增 / 编辑作品弹窗（同一套表单，靠 work-id 区分） ===== -->
-  <dialog class="modal" id="work-modal">
-    <form class="modal__body" id="work-form">
-      <h2 class="modal__title" id="modal-title">新增作品</h2>
-      <input type="hidden" id="work-id">
+  <!-- ===== 项目弹窗：标题必填，简介/标签/封面都可选 ===== -->
+  <dialog class="modal" id="project-modal">
+    <form class="modal__body" id="project-form">
+      <h2 class="modal__title" id="project-modal-title">新增项目</h2>
+      <input type="hidden" id="project-id">
 
       <label class="field">
-        <span class="field__label">标题 <span class="field__note">拖了文件可留空，自动取文件名</span></span>
-        <input id="work-title" type="text" maxlength="120">
+        <span class="field__label">标题</span>
+        <input id="project-title" type="text" maxlength="120" autocomplete="off">
       </label>
 
       <label class="field">
-        <span class="field__label">类型</span>
-        <select id="work-type">
-          <option value="text">文本</option>
-          <option value="video">视频</option>
-          <option value="image">图片</option>
-          <option value="code">代码</option>
-          <option value="project">项目</option>
-        </select>
+        <span class="field__label">简介 <span class="field__note">可选，一两句话说明这是什么项目</span></span>
+        <textarea id="project-summary" rows="3"></textarea>
       </label>
 
-      <div class="field" id="field-content">
-        <span class="field__label" id="content-label">内容</span>
-        <textarea id="work-content" rows="5"></textarea>
-      </div>
+      <label class="field">
+        <span class="field__label">标签 <span class="field__note">可选</span></span>
+        <input id="project-tags" type="text" placeholder="用逗号分隔，如：商业, 记录片">
+      </label>
 
-      <!-- 新增时：拖拽区 + 文件选择。浏览器拿不到本地绝对路径，
-           所以只能把文件本体传上来（后端落到 media/ 再解析） -->
-      <div class="field" id="field-files" hidden>
-        <span class="field__label">文件（拖进来或点击选择，可多选）</span>
-        <div class="dropzone" id="dropzone" role="button" tabindex="0">
-          <span class="dropzone__plus">+</span>
-          <span class="dropzone__main">拖文件到这里，或点击选择</span>
-          <span class="dropzone__sub">图片自动生成描述 · PDF/Word/Excel/代码自动解析正文 · 视频只存元数据</span>
-        </div>
-        <input id="work-file" type="file" multiple hidden>
-        <ul class="filelist" id="filelist"></ul>
-      </div>
-
-      <div class="field" id="field-cover" hidden>
-        <span class="field__label">视频封面（可选，会生成一句画面描述）</span>
-        <div class="dropzone dropzone--sm" id="dropzone-cover" role="button" tabindex="0">
+      <div class="field" id="field-project-cover">
+        <span class="field__label">封面 <span class="field__note">可选，一张图</span></span>
+        <div class="dropzone dropzone--sm" id="dropzone-project-cover" role="button" tabindex="0">
           <span class="dropzone__main">点击选择封面图片</span>
         </div>
-        <input id="work-cover" type="file" accept="image/*" hidden>
-        <ul class="filelist" id="coverlist"></ul>
+        <input id="project-cover" type="file" accept="image/*" hidden>
+        <ul class="filelist" id="project-coverlist"></ul>
       </div>
 
+      <div class="modal__actions">
+        <button type="button" class="btn" id="btn-project-cancel">取消</button>
+        <button type="submit" class="btn btn--primary" id="btn-project-save">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ===== 素材弹窗：拖文件进来即可，类型由扩展名决定 ===== -->
+  <dialog class="modal" id="asset-modal">
+    <form class="modal__body" id="asset-form">
+      <h2 class="modal__title">添加素材</h2>
+
+      <div class="dropzone" id="dropzone" role="button" tabindex="0">
+        <span class="dropzone__plus">+</span>
+        <span class="dropzone__main">拖文件到这里，或点击选择</span>
+        <span class="dropzone__sub">
+          图片自动生成描述 · PDF/Word/Excel/代码自动解析正文 · 视频/音频只存元数据
+        </span>
+      </div>
+      <input id="asset-file" type="file" multiple hidden>
+      <ul class="filelist" id="filelist"></ul>
+
       <label class="field">
-        <span class="field__label">标签</span>
-        <input id="work-tags" type="text" placeholder="用逗号分隔，如：明史, 分镜">
+        <span class="field__label" id="asset-title-label">
+          标题 <span class="field__note">拖了文件可留空，自动取文件名</span>
+        </span>
+        <input id="asset-title" type="text" maxlength="120" autocomplete="off">
+      </label>
+
+      <label class="field">
+        <span class="field__label" id="asset-notes-label">备注 / 描述</span>
+        <textarea id="asset-notes" rows="3"></textarea>
+      </label>
+
+      <label class="field">
+        <span class="field__label">标签 <span class="field__note">可选</span></span>
+        <input id="asset-tags" type="text" placeholder="用逗号分隔">
       </label>
 
       <div class="modal__actions">
-        <button type="button" class="btn" id="btn-cancel">取消</button>
-        <button type="submit" class="btn btn--primary" id="btn-save">保存</button>
+        <button type="button" class="btn" id="btn-asset-cancel">取消</button>
+        <button type="submit" class="btn btn--primary" id="btn-asset-save">保存</button>
       </div>
     </form>
   </dialog>
@@ -130,7 +178,7 @@
       </label>
 
       <label class="field">
-        <span class="field__label">硅基流动密钥 <span class="field__note">检索要用（能把作品搜出来）</span></span>
+        <span class="field__label">硅基流动密钥 <span class="field__note">检索要用（能把素材搜出来）</span></span>
         <input id="key-embedding" type="password" autocomplete="off" spellcheck="false" placeholder="sk-...">
       </label>
 
@@ -152,21 +200,43 @@
     </form>
   </dialog>
 
-  <!-- ===== 作品卡片模板：JS 直接 clone，避免手拼 HTML 字符串 ===== -->
-  <template id="tpl-work">
-    <li class="work-card">
-      <div class="work-card__head">
-        <span class="badge"></span>
-        <time class="work-card__date"></time>
+  <!-- ===== 项目卡片模板：JS clone，避免手拼 HTML 字符串 ===== -->
+  <template id="tpl-project">
+    <li class="project-card">
+      <div class="project-card__cover" data-cover-slot>
+        <img alt="" hidden>
+        <span class="project-card__placeholder">作</span>
       </div>
-      <h3 class="work-card__title"></h3>
-      <p class="work-card__excerpt"></p>
-      <div class="work-card__foot">
-        <ul class="work-card__tags"></ul>
-        <div class="work-card__actions">
-          <button type="button" class="btn btn--ghost work-card__edit">编辑</button>
-          <button type="button" class="btn btn--ghost work-card__del">删除</button>
+      <div class="project-card__body">
+        <div class="project-card__head">
+          <h3 class="project-card__title"></h3>
+          <time class="project-card__date"></time>
         </div>
+        <p class="project-card__summary"></p>
+        <ul class="project-card__kinds"></ul>
+        <div class="project-card__foot">
+          <span class="project-card__count"></span>
+          <div class="project-card__actions">
+            <button type="button" class="btn btn--ghost project-card__open">打开</button>
+            <button type="button" class="btn btn--ghost project-card__del">删除</button>
+          </div>
+        </div>
+      </div>
+    </li>
+  </template>
+
+  <!-- ===== 素材卡片模板 ===== -->
+  <template id="tpl-asset">
+    <li class="asset-card">
+      <div class="asset-card__head">
+        <span class="badge"></span>
+        <button type="button" class="btn btn--ghost asset-card__del">移除</button>
+      </div>
+      <h3 class="asset-card__title"></h3>
+      <p class="asset-card__excerpt"></p>
+      <div class="asset-card__foot">
+        <ul class="asset-card__tags"></ul>
+        <span class="asset-card__date"></span>
       </div>
     </li>
   </template>
@@ -178,6 +248,6 @@
     </div>
   </template>
 
-  <script src="app.js?v=4"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>

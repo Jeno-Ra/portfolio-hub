@@ -4,9 +4,9 @@
     uv run python eval/run_eval.py
 
 工作方式：
-1. 从 eval/corpus.json 录入语料（标记为评测数据），建索引
+1. 从 eval/corpus.json 录入语料（全部挂到一个「评测语料」项目下），建索引
 2. 从 eval/questions.json 逐条检索，统计指标
-3. 结束后删掉自己录入的作品，不影响你库里的真实数据
+3. 结束后删掉自己录入的素材与项目，不影响你库里的真实数据
 
 注意：corpus.json 是**合成数据**，用它跑出的数字只能证明"链路与阈值是否合理"，
 不能当作简历上的真实指标。换成你自己的作品后重跑，那才是真实数字。
@@ -23,55 +23,63 @@ sys.path.insert(0, str(ROOT))
 from backend.app import crud, schemas, vector_store
 from backend.app.database import SessionLocal, init_db
 from backend.app.embedding import embed_text
-from backend.app.indexer import index_work
-from backend.app.main import MAX_DISTANCE, RETRIEVAL_TOP_K
+from backend.app.indexer import index_asset
+from backend.app.qa_api import MAX_DISTANCE, RETRIEVAL_TOP_K
 
 EVAL_DIR = ROOT / "eval"
+PROJECT_TITLE = "评测语料"
 
 
 def load_json(name):
     return json.loads((EVAL_DIR / name).read_text(encoding="utf-8"))
 
 
-def seed_corpus(db, works) -> list[int]:
-    """录入语料，返回新建作品的 id（用于事后精确清理）。"""
+def seed_corpus(db, items) -> tuple[int, list[int]]:
+    """录入语料，返回（项目 id, 素材 id 列表），用于事后精确清理。"""
+    project = crud.create_project(
+        db,
+        schemas.ProjectCreate(title=PROJECT_TITLE, summary="eval/run_eval.py 自动录入", tags=["评测"]),
+    )
     created = []
-    for item in works:
-        work = crud.create_work(
+    for item in items:
+        asset = crud.create_asset(
             db,
-            schemas.WorkCreate(
+            schemas.AssetCreate(
                 title=item["title"],
-                type=item["type"],
+                type=item.get("type", ""),
                 content=item["content"],
                 tags=item["tags"],
+                project_ids=[project.id],
             ),
         )
-        index_work(db, work)
-        created.append(work.id)
-    return created
+        index_asset(db, asset)
+        created.append(asset.id)
+    return project.id, created
 
 
-def cleanup(db, ids: list[int]) -> None:
-    for work_id in ids:
-        vector_store.delete_work(work_id)
-        crud.delete_work(db, work_id)
+def cleanup(db, project_id: int, asset_ids: list[int]) -> None:
+    for asset_id in asset_ids:
+        vector_store.delete_asset(asset_id)
+        crud.delete_asset(db, asset_id)
+    crud.delete_project(db, project_id)
 
 
 def run() -> int:
     db = SessionLocal()
     init_db()
+    project_id = 0
     created_ids: list[int] = []
 
     try:
-        corpus = load_json("corpus.json")["works"]
+        corpus = load_json("corpus.json")["assets"]
         cases = load_json("questions.json")["cases"]
 
         print(f"语料 {len(corpus)} 条 · 评测集 {len(cases)} 条")
         print("录入语料并建索引…")
-        created_ids = seed_corpus(db, corpus)
+        project_id, created_ids = seed_corpus(db, corpus)
         print(f"完成，Chroma 片段数 = {vector_store.count()}\n")
 
-        title_to_id = {w.title: w.id for w in crud.list_works(db, skip=0, limit=200)}
+        title_to_id = {a.title: a.id for a in crud.list_assets(db, skip=0, limit=200)}
         id_to_title = {v: k for k, v in title_to_id.items()}
 
         stats = {"事实型": [], "细节型": [], "多作品": [], "口语同义": [], "应拒绝": []}
@@ -88,7 +96,7 @@ def run() -> int:
             latencies.append((time.perf_counter() - t0) * 1000)
 
             relevant = [h for h in hits if h["distance"] <= MAX_DISTANCE]
-            got_top5 = [id_to_title.get(h["work_id"], "?") for h in hits]
+            got_top5 = [id_to_title.get(h["asset_id"], "?") for h in hits]
 
             if not expected_titles:
                 ok = not relevant  # 应拒绝：过滤后应为空
@@ -138,9 +146,9 @@ def run() -> int:
         return 0 if passed == total else 1
 
     finally:
-        if created_ids:
-            cleanup(db, created_ids)
-            print(f"\n已清理评测语料（{len(created_ids)} 条），未触碰库内其他作品。")
+        if project_id:
+            cleanup(db, project_id, created_ids)
+            print(f"\n已清理评测语料（{len(created_ids)} 件素材），未触碰库内其他素材。")
         db.close()
 
 

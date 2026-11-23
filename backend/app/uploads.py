@@ -28,13 +28,14 @@ CHUNK = 1024 * 1024  # 1 MB 一片
 # 文件名里不允许出现的字符（Windows 保留字符 + 控制符）
 _ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
-# 图片 / 视频不走正文解析：图片交给视觉模型描述，视频只存元数据
+# 图片 / 视频 / 音频不走正文解析：图片交给视觉模型描述，视频和音频只存元数据
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv"}
+AUDIO_SUFFIXES = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma"}
 
 # 上传白名单 = 能解析正文的 + 能描述/存元数据的。不在其中的（.exe / .zip / .psd…）直接拒，
-# 免得用户传上来一个"能存但永远搜不到任何内容"的作品，还以为索引坏了。
-ALLOWED_SUFFIXES = SUPPORTED | IMAGE_SUFFIXES | VIDEO_SUFFIXES
+# 免得用户传上来一个"能存但永远搜不到任何内容"的素材，还以为索引坏了。
+ALLOWED_SUFFIXES = SUPPORTED | IMAGE_SUFFIXES | VIDEO_SUFFIXES | AUDIO_SUFFIXES
 
 # 图片的魔数：防止把 .mkv 改名成 .png 传上来，视觉模型那边只会得到一句"解码失败"
 _IMAGE_MAGIC = {
@@ -61,7 +62,7 @@ def check_suffix(name: str) -> str:
     if suffix not in ALLOWED_SUFFIXES:
         raise ValueError(
             f"不支持的文件类型：{suffix or '（无扩展名）'}。"
-            "可以传图片、视频、PDF / Word / PPT / Excel、纯文本或代码文件"
+            "可以传图片、视频、音频、PDF / Word / PPT / Excel、纯文本或代码文件"
         )
     return suffix
 
@@ -113,9 +114,24 @@ def save_upload(upload: UploadFile) -> Path:
 
 
 def is_media_file(path: Path) -> bool:
-    """判断某个路径是不是上传目录里的副本（删除作品时只清这种，绝不碰用户原文件）。"""
+    """判断某个路径是不是上传目录里的副本（删除素材时只清这种，绝不碰用户原文件）。"""
     try:
         path.resolve().relative_to(MEDIA_DIR.resolve())
         return True
     except (ValueError, OSError):
         return False
+
+
+def discard_media(source: str | None) -> bool:
+    """删掉我们自己存的副本，返回是否真的删了。
+
+    素材可能挂在多个项目下，删素材要清副本；删项目（连素材一起删）同样要清，
+    否则 media/ 会一直攒着没人引用的文件。用户自己选的文件永远不在此列。
+    """
+    if not source:
+        return False
+    path = Path(source)
+    if not is_media_file(path):
+        return False
+    path.unlink(missing_ok=True)
+    return True
