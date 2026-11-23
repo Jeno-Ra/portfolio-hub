@@ -288,11 +288,11 @@ uv run python eval/run_eval.py  # 评测：recall@5 / 拒绝准确率
 
 访问 `/docs` 看交互式接口文档。
 
-### 方式二：容器跑（三服务）
+### 方式二：容器跑（四服务）
 
 ```bash
 cp .env.example .env          # 填入密钥
-docker compose up -d --build  # backend + postgres + chroma
+docker compose up -d --build  # backend + postgres + chroma + nginx
 docker compose ps             # 等 backend / postgres 显示 healthy
 curl http://127.0.0.1:8000/health
 ```
@@ -311,7 +311,7 @@ curl http://127.0.0.1:8000/health
 | 指标 | 数值 |
 | ---- | ---- |
 | 镜像体积 | **796 MB**（单阶段写法会到 1.72 GB） |
-| 三服务常驻内存 | backend 143 MB + postgres 35 MB + chroma 11 MB ≈ **190 MB** |
+| 四服务常驻内存 | backend 170 MB + postgres 36 MB + chroma 36 MB + nginx 6 MB ≈ **248 MB**（2026-11-23 实测，开着 nginx 与一次检索后的稳定值） |
 | 数据卷 | 3 个命名卷；删 backend 容器不影响 PG 与向量 |
 
 #### 怎么确认真的跑起来了（不只是 `docker ps` 有输出）
