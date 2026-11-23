@@ -408,6 +408,8 @@ uv run ruff check .  # 静态检查
 | 不联网       | `backend/tests/fakes.py` 把 embedding / 对话 / 意图解析 / 向量库全换成假实现                 | 真调一次要花钱、CI 上会超时，还测不稳           |
 | 不碰真实数据 | `conftest.py` 在导入应用之前把 `DB_PATH` / `MEDIA_DIR` / `CHROMA_DIR` 指到临时目录，每个用例重建表 | 测试绝不能写进你自己的作品库                   |
 
+**不需要 `.env`**：三个 API key 在测试里用占位值，所以新克隆的仓库（或 CI）直接 `uv run pytest` 就能跑。
+
 `test_runs_on_temporary_database` 是保护性断言：万一环境变量没生效，它会先失败报警，而不是让后面的用例把真库清空。
 
 覆盖范围：

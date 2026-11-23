@@ -16,6 +16,12 @@ os.environ["DB_PATH"] = str(_TMP / "test.db")
 os.environ["MEDIA_DIR"] = str(_TMP / "media")
 os.environ["CHROMA_DIR"] = str(_TMP / "chroma")
 
+# 三个 key 在 config.py 里是必填项。测试全程不联网，给占位值就够——
+# 这样在没有 .env 的机器上（CI、别人的电脑）也能直接跑 pytest。
+os.environ["DEEPSEEK_API_KEY"] = "test-key"
+os.environ["EMBEDDING_API_KEY"] = "test-key"
+os.environ["GPT_API_KEY"] = "test-key"
+
 MEDIA = _TMP / "media"
 
 import pytest
