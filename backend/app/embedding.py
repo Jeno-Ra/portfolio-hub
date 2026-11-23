@@ -7,47 +7,30 @@
 
 import time
 
-from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
+from openai import APIConnectionError, APITimeoutError, RateLimitError
 
+from backend.app.clients import LazyClient
 from backend.app.config import settings
-from backend.app.errors import NotConfigured
 
 MAX_RETRIES = 3
 FALLBACK_BACKOFF = 0.5
 
-# 懒加载：没有密钥时不应该在 import 阶段就崩，等到真正向量化再报清楚的错
-_client: OpenAI | None = None
-
-
-def _make_client() -> OpenAI:
-    if not settings.embedding_api_key:
-        raise NotConfigured(
-            "还没有填向量化服务（硅基流动）的密钥，点右上角「设置」填上就能检索了"
-        )
-    return OpenAI(
-        api_key=settings.embedding_api_key,
-        base_url=settings.embedding_base_url,
-        timeout=settings.llm_timeout,
-        max_retries=0,  # 与 llm.py 一致：重试权归本模块，避免双层重试
-    )
-
-
-def _get_client() -> OpenAI:
-    global _client
-    if _client is None:
-        _client = _make_client()
-    return _client
+_client = LazyClient(
+    "embedding_api_key",
+    "embedding_base_url",
+    "llm_timeout",
+    "还没有填向量化服务（硅基流动）的密钥，点右上角「设置」填上就能检索了",
+)
 
 
 def reload() -> None:
     """密钥变更后调用，下次请求用新密钥重建客户端。"""
-    global _client
-    _client = None
+    _client.reload()
 
 
 def ping() -> None:
     """探活：把一句话真的向量化一次。向量化便宜，且能顺带验证维度是否对得上。"""
-    vectors = _get_client().embeddings.create(
+    vectors = _client.get().embeddings.create(
         model=settings.embedding_model, input=["ping"]
     )
     actual = len(vectors.data[0].embedding)
@@ -96,7 +79,7 @@ def _embed_batch(batch: list[str]) -> list[list[float]]:
 
     for attempt in range(MAX_RETRIES + 1):
         try:
-            resp = _get_client().embeddings.create(
+            resp = _client.get().embeddings.create(
                 model=settings.embedding_model,
                 input=batch,
             )

@@ -5,7 +5,7 @@
 换 embedding 模型或换向量库时，这些用例不需要改写。
 """
 
-from backend.app import main, vector_store
+from backend.app import embedding, qa_api, vector_store
 from backend.tests.conftest import body
 from backend.tests.fakes import CALLS, FAKE_HITS
 
@@ -34,7 +34,7 @@ def test_retrieve_keeps_only_hits_within_threshold(monkeypatch):
     ]
     monkeypatch.setattr(vector_store, "query", lambda *args, **kwargs: hits)
 
-    kept = main._retrieve("长城拍了什么")
+    kept = qa_api._retrieve("长城拍了什么")
 
     assert [hit["distance"] for hit in kept] == [0.100, 0.449, 0.450]
     assert [hit["work_id"] for hit in kept] == [1, 1, 2]  # 原有顺序不能被重排
@@ -50,10 +50,10 @@ def test_retrieve_uses_top_k_and_question_vector(monkeypatch):
         return []
 
     monkeypatch.setattr(vector_store, "query", spy_query)
-    monkeypatch.setattr(main, "embed_text", lambda question: [0.5] * 1024)
+    monkeypatch.setattr(embedding, "embed_text", lambda question: [0.5] * 1024)
 
-    assert main._retrieve("长城拍了什么") == []
-    assert seen["top_k"] == main.RETRIEVAL_TOP_K == 5
+    assert qa_api._retrieve("长城拍了什么") == []
+    assert seen["top_k"] == qa_api.RETRIEVAL_TOP_K == 5
     assert seen["vector"] == [0.5] * 1024
 
 
@@ -97,7 +97,7 @@ def test_context_numbers_chunks_in_the_same_order_as_sources():
         make_hit(2, 3, 0.3, title="茶室空镜", text="乙段内容"),
     ]
 
-    context = main._chunks_context(hits)
+    context = qa_api._chunks_context(hits)
 
     assert context.startswith("[1] 《长城拍摄笔记》第 0 段（距离 0.2）")
     assert "[2] 《茶室空镜》第 3 段（距离 0.3）" in context
@@ -109,7 +109,7 @@ def test_rag_context_contains_catalog_and_chunks(client, sample_work):
     from backend.app.database import SessionLocal
 
     with SessionLocal() as db:
-        context = main._rag_context(db, [make_hit(sample_work["id"], 0, 0.2)])
+        context = qa_api._rag_context(db, [make_hit(sample_work["id"], 0, 0.2)])
 
     assert "【作品目录】" in context
     assert "- [text] 长城拍摄笔记｜标签：拍摄、长城" in context

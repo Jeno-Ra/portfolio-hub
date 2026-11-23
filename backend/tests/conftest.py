@@ -26,7 +26,7 @@ MEDIA = _TMP / "media"
 
 import pytest
 
-from backend.app import llm, main, vector_store
+from backend.app import embedding, indexer, llm, main, vector_store
 from backend.app.database import Base, engine
 from backend.tests import fakes
 
@@ -36,8 +36,10 @@ def offline(monkeypatch):
     """把一切外部依赖换成本地假实现，并保证每个用例从空库开始。"""
     fakes.reset()
 
-    monkeypatch.setattr(main, "index_work", lambda *a, **k: None)
-    monkeypatch.setattr(main, "embed_text", fakes.fake_embed)
+    # 假实现的补丁点跟着代码走：作品接口调 indexer.index_quietly，
+    # 问答接口调 embedding.embed_text，都在各自模块里打补丁才有效果
+    monkeypatch.setattr(indexer, "index_work", lambda *a, **k: None)
+    monkeypatch.setattr(embedding, "embed_text", fakes.fake_embed)
     monkeypatch.setattr(llm, "chat", fakes.fake_chat)
     monkeypatch.setattr(llm, "chat_stream", fakes.fake_chat_stream)
     monkeypatch.setattr(llm, "raw_chat", fakes.fake_raw_chat)

@@ -9,9 +9,21 @@
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
-from backend.app import models, vector_store
+from backend.app import errors, models, vector_store
 from backend.app.chunking import split_text
 from backend.app.embedding import embed_texts
+
+
+def index_quietly(db: Session, work: models.Work) -> None:
+    """建索引，但没配向量化密钥时不阻塞主流程。
+
+    打包版第一次运行往往还没有密钥：这时作品要能先存下来，
+    等用户在设置里填好密钥、保存时再统一补建（见 settings_api.update_settings）。
+    """
+    try:
+        index_work(db, work)
+    except errors.NotConfigured:
+        pass
 
 
 def index_work(db: Session, work: models.Work) -> int:

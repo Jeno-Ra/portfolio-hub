@@ -23,17 +23,27 @@
 
 | 目录             | 用途                                          |
 | ---------------- | --------------------------------------------- |
-| `backend/app/`   | 路由 / 模型 / 数据层 / 检索 / 意图路由 / 权限策略 |
+| `backend/app/`   | 后端：入口组装 + 三个业务模块 + 数据层 / 检索 / 意图路由 / 权限策略（见下表） |
 | `backend/tests/` | 测试用例                                      |
 | `backend/media/` | 网页上传的文件副本（本地跑时的默认落点，不入库） |
 | `frontend/`      | 原生单页前端                                  |
-| `infra/`         | Dockerfile                                    |
+| `infra/`         | Dockerfile + nginx 反代配置                   |
 | `eval/`          | 评测语料、50 条评测集与评测脚本                |
 | `mobile/`        | Android 外壳（Capacitor）：`sync-web.mjs` + `android/` |
 | `desktop/`       | Windows 端：Edge `--app` 启动器、图标、`portable.py` + `build.ps1`（打包成单文件 exe） |
 | `scripts/`       | `deploy.ps1` 一键部署脚本                     |
 | `docs/`          | 部署指南（备份恢复、故障排查）                |
-| `docker-compose.yml` | 三服务编排（backend + postgres + chroma） |
+| `docker-compose.yml` | 四服务编排（backend + postgres + chroma + nginx） |
+
+`backend/app/` 的分工（按职责切，不按技术分层）：
+
+| 模块              | 职责                                                     |
+| ----------------- | -------------------------------------------------------- |
+| `main.py`         | 只管组装：日志、CORS、两个中间件、`/health`、挂路由、托管前端（约 130 行） |
+| `works_api.py`    | 作品增删改查 + 两种录入（网页上传 / 服务器路径）          |
+| `qa_api.py`       | 提问：意图判断、检索、统计、改名/删除，`/ask` 与 `/ask/stream` 共用一套逻辑 |
+| `settings_api.py` | 密钥读写与探活、重建索引、打包版退出                      |
+| `clients.py`      | 惰性 OpenAI 客户端（三个服务共用一处，缺密钥时给出可读提示） |
 
 ## 接口
 
@@ -48,7 +58,7 @@
 | POST   | `/works/upload`     | **网页上传**：multipart 直接传文件，后端落盘后解析（推荐） | 201 |
 | POST   | `/works/ingest`     | 从服务器上的路径录入（脚本 / `docker cp` 场景）    | 201        |
 | POST   | `/ask`              | 提问：意图路由 → 检索 → 大模型，返回答案与引用     | 200        |
-| POST   | `/ask/stream`       | 同上，SSE 流式返回（meta → delta → done）         | 200        |
+| POST   | `/ask/stream`       | 同上，SSE 流式返回（meta → delta → done），改名/删除也走这里 | 200        |
 | GET    | `/settings`         | 读密钥配置（只回显 `****后4位`）与数据目录         | 200        |
 | PUT    | `/settings`         | 写密钥并热重载客户端，返回重建索引的作品数         | 200        |
 | POST   | `/settings/test`    | 逐个探活三个服务（不耗生成额度）                   | 200        |
@@ -156,6 +166,11 @@ docker compose logs backend | tail -1 | python -m json.tool  # 单条格式化
 **AI 的写权限是受限的**（`backend/app/policy.py`）：只能改标题 / 标签 / 类型，
 **不能改作品内容**（内容来自原始文件，改掉等于丢数据），也从不写磁盘上的源文件；
 删除必须二次确认。
+
+上面这套判断在 `/ask` 和 `/ask/stream` 里是**同一份代码**（`qa_api._prepare`），
+所以「把《金山岭》改名成 X」「删掉茶室空镜」在界面上同样能生效——流式接口不是只读检索。
+管理动作没有增量文本，一次 `delta` 推完整句就结束；`done` 事件带 `refresh: true`，
+前端据此重新拉一次列表，避免界面上还挂着旧标题。
 
 ## 环境变量
 

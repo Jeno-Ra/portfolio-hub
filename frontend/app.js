@@ -538,6 +538,9 @@ async function askStream(question) {
           messagesEl.scrollTop = messagesEl.scrollHeight;
         } else if (frame.event === "error") {
           throw new Error(frame.data.message || "生成失败");
+        } else if (frame.event === "done" && frame.data.refresh) {
+          // 改名/删除/新增生效了：列表得跟着变，否则界面还在显示旧标题
+          await loadWorks();
         }
       }
     }
