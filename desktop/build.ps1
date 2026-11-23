@@ -23,6 +23,7 @@ try {
     --icon "$root\desktop\app.ico" `
     --paths "$root" `
     --add-data "$root\frontend;frontend" `
+    --collect-submodules chromadb `
     --collect-data docx `
     --collect-data pptx `
     --collect-data pypdf `
