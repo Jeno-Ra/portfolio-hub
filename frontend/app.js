@@ -567,5 +567,126 @@ $("composer").addEventListener("submit", async (event) => {
   }
 });
 
+/* ---------- 设置：填密钥 ---------- */
+// 打包版没有 .env 文件，密钥由用户在这里填，后端写进用户目录的 设置.json
+const settingsModal = $("settings-modal");
+
+const KEY_FIELDS = {
+  deepseek_api_key: "key-deepseek",
+  embedding_api_key: "key-embedding",
+  gpt_api_key: "key-gpt",
+};
+
+function collectKeys() {
+  const payload = {};
+  for (const [key, id] of Object.entries(KEY_FIELDS)) {
+    const value = $(id).value.trim();
+    if (value) payload[key] = value; // 留空 = 不改，不提交这一项
+  }
+  return payload;
+}
+
+function applySettings(s) {
+  for (const [key, id] of Object.entries(KEY_FIELDS)) {
+    const input = $(id);
+    const masked = s.keys?.[key] || "";
+    input.value = "";
+    input.placeholder = masked ? `已保存 ${masked}，留空表示不改` : "sk-...";
+  }
+  $("settings-storage").textContent = `数据存在：${s.storage}`;
+  // 只有打包版才有「退出程序」：关窗口不会结束进程，得给它一个显式的出口
+  $("btn-quit").hidden = !s.portable;
+}
+
+function openSettings(firstRun = false) {
+  $("probe-results").hidden = true;
+  $("probe-results").replaceChildren();
+  $("settings-note").textContent = firstRun
+    ? "第一次用，先填密钥：对话密钥、检索密钥填上，作品才能被搜到、AI 才能回答问题。只管理作品可以先跳过。"
+    : "填一次就行。密钥只保存在这台电脑上，不会上传到任何地方。";
+  settingsModal.showModal();
+}
+
+function probeItem(text, ok) {
+  const li = document.createElement("li");
+  li.className = `probe__item probe__item--${ok ? "ok" : "fail"}`;
+  li.textContent = `${ok ? "✓" : "✗"} ${text}`; // 安全：纯文本
+  return li;
+}
+
+async function testSettings() {
+  const list = $("probe-results");
+  list.hidden = false;
+  list.replaceChildren(probeItem("正在测试…", true));
+  try {
+    const res = await api("/settings/test", {
+      method: "POST",
+      body: JSON.stringify(collectKeys()),
+    });
+    list.replaceChildren(
+      ...res.results.map((r) => probeItem(`${r.service}：${r.message}`, r.ok)),
+    );
+  } catch (err) {
+    list.replaceChildren(probeItem(err.message, false));
+  }
+}
+
+async function loadSettings() {
+  try {
+    const s = await api("/settings");
+    state.settings = s;
+    applySettings(s);
+    // 一个密钥都没有 = 全新安装，直接把设置弹出来，省得用户找不到入口
+    const missing = Object.values(s.configured ?? {}).filter((ok) => !ok).length;
+    if (missing === Object.keys(KEY_FIELDS).length) openSettings(true);
+  } catch (err) {
+    console.debug(`[settings] ${err.message}`);
+  }
+}
+
+$("btn-settings").addEventListener("click", () => openSettings(false));
+$("btn-settings-close").addEventListener("click", () => settingsModal.close());
+$("btn-settings-test").addEventListener("click", testSettings);
+$("btn-quit").addEventListener("click", async () => {
+  if (!confirm("退出作品集？退出后需要重新双击图标才能再用。")) return;
+  try {
+    await api("/quit", { method: "POST" });
+  } catch {
+    // 服务端退出时连接会被切断，这里报错是正常的
+  }
+  document.body.replaceChildren();
+  const tip = document.createElement("p");
+  tip.className = "empty";
+  tip.textContent = "已退出。可以关掉这个窗口了。";
+  document.body.appendChild(tip);
+});
+
+$("settings-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const payload = collectKeys();
+  if (!Object.keys(payload).length) {
+    toast("没有要保存的内容：三个都留空表示不改");
+    return;
+  }
+
+  const btn = $("btn-settings-save");
+  btn.disabled = true;
+  try {
+    const s = await api("/settings", { method: "PUT", body: JSON.stringify(payload) });
+    state.settings = s;
+    applySettings(s);
+    const extra = s.indexed_works ? `，已为 ${s.indexed_works} 条作品建好索引` : "";
+    toast(`保存成功${extra}`);
+    settingsModal.close();
+    await loadWorks();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 /* ---------- 启动 ---------- */
 loadWorks();
+loadSettings();

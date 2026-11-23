@@ -14,6 +14,7 @@
   <header class="topbar">
     <h1 class="topbar__title">作品集</h1>
     <span class="topbar__hint">AI 作品管理 · 本地版</span>
+    <button id="btn-settings" type="button" class="btn btn--ghost topbar__settings">设置</button>
   </header>
 
   <main class="layout">
@@ -111,6 +112,42 @@
       <div class="modal__actions">
         <button type="button" class="btn" id="btn-cancel">取消</button>
         <button type="submit" class="btn btn--primary" id="btn-save">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ===== 设置弹窗：打包版没有 .env 文件，密钥在这里填 ===== -->
+  <dialog class="modal modal--settings" id="settings-modal">
+    <form class="modal__body" id="settings-form">
+      <h2 class="modal__title">设置</h2>
+      <p class="modal__note" id="settings-note">
+        填一次就行。密钥只保存在这台电脑上，不会上传到任何地方。
+      </p>
+
+      <label class="field">
+        <span class="field__label">DeepSeek 密钥 <span class="field__note">对话要用</span></span>
+        <input id="key-deepseek" type="password" autocomplete="off" spellcheck="false" placeholder="sk-...">
+      </label>
+
+      <label class="field">
+        <span class="field__label">硅基流动密钥 <span class="field__note">检索要用（能把作品搜出来）</span></span>
+        <input id="key-embedding" type="password" autocomplete="off" spellcheck="false" placeholder="sk-...">
+      </label>
+
+      <label class="field">
+        <span class="field__label">视觉模型密钥 <span class="field__note">图片自动描述要用，可不填</span></span>
+        <input id="key-gpt" type="password" autocomplete="off" spellcheck="false" placeholder="sk-...">
+      </label>
+
+      <ul class="probe" id="probe-results" hidden></ul>
+
+      <p class="modal__note" id="settings-storage"></p>
+
+      <div class="modal__actions">
+        <button type="button" class="btn" id="btn-quit" hidden>退出程序</button>
+        <button type="button" class="btn" id="btn-settings-test">测试连接</button>
+        <button type="button" class="btn" id="btn-settings-close">关闭</button>
+        <button type="submit" class="btn btn--primary" id="btn-settings-save">保存</button>
       </div>
     </form>
   </dialog>

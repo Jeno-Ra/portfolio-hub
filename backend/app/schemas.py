@@ -93,3 +93,14 @@ class AskResponse(BaseModel):
     answer: str = Field(..., description="回答内容")
     conversation_id: int = Field(..., description="这次问答落在哪个会话里")
     sources: list[int] = Field(default_factory=list, description="答案引用的作品 id")
+
+
+class SettingsUpdate(BaseModel):
+    """界面里填的密钥。None = 这一项不动，"" = 清除，其他 = 覆盖。
+
+    用 None 而不是默认空串，是为了区分"没提交这一项"和"提交了空值要清掉"。
+    """
+
+    deepseek_api_key: str | None = None
+    embedding_api_key: str | None = None
+    gpt_api_key: str | None = None

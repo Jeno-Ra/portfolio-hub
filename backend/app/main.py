@@ -1,5 +1,8 @@
 import difflib
 import json
+import os
+import sys
+import threading
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -14,7 +17,18 @@ from openai import (
 )
 from sqlalchemy.orm import Session
 
-from backend.app import crud, llm, policy, router, vector_store
+from backend.app import (
+    crud,
+    embedding,
+    errors,
+    llm,
+    policy,
+    router,
+    user_config,
+    vector_store,
+    vision,
+)
+from backend.app.config import IS_FROZEN, settings
 from backend.app.database import get_db, init_db
 from backend.app.embedding import embed_text
 from backend.app.files import extract_text
@@ -24,6 +38,7 @@ from backend.app.schemas import (
     AskRequest,
     AskResponse,
     IngestRequest,
+    SettingsUpdate,
     WorkCreate,
     WorkResponse,
     WorkUpdate,
@@ -61,6 +76,12 @@ async def fresh_frontend(request: Request, call_next):
     return response
 
 
+@app.exception_handler(errors.NotConfigured)
+async def not_configured_handler(request: Request, exc: errors.NotConfigured):
+    """缺密钥属于「用户还没配置」，不是服务器故障：400 + 可读提示，前端据此引导去设置。"""
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
 @app.exception_handler(APIStatusError)
 async def upstream_error_handler(request: Request, exc: APIStatusError):
     """把上游大模型服务的错误翻译成合适的 HTTP 语义。
@@ -81,6 +102,22 @@ async def upstream_error_handler(request: Request, exc: APIStatusError):
 # 启动时确保表存在。create_all 是幂等的：缺哪张建哪张，不动已有数据
 init_db()
 
+# 打包版没有 .env：密钥存在用户目录的 设置.json 里，启动时灌进 settings
+user_config.apply()
+
+
+def _index_quietly(db: Session, work: Work) -> None:
+    """建索引，但没配向量化密钥时不阻塞主流程。
+
+    打包版第一次运行往往还没有密钥：这时作品要能先存下来，
+    等用户在设置里填好密钥、保存时再统一补建（见 update_settings）。
+    """
+    try:
+        index_work(db, work)
+    except errors.NotConfigured:
+        pass
+
+
 
 @app.get("/health")
 def health():
@@ -91,7 +128,7 @@ def health():
 def create_work(work: WorkCreate, db: Session = Depends(get_db)):
     created = crud.create_work(db, work)
     # 入库后立刻建索引：否则新作品搜不到（之前就是这个坑）
-    index_work(db, created)
+    _index_quietly(db, created)
     return created
 
 
@@ -169,7 +206,7 @@ def _store_work(
     created.source_path = str(source)
     db.commit()
     db.refresh(created)
-    index_work(db, created)
+    _index_quietly(db, created)
     return created
 
 
@@ -256,7 +293,7 @@ def patch_work(work_id: int, data: WorkUpdate, db: Session = Depends(get_db)):
     if work is None:
         raise HTTPException(status_code=404, detail="作品不存在")
     # 内容变了要重建索引，否则检索还在命中旧片段
-    index_work(db, work)
+    _index_quietly(db, work)
     return work
 
 
@@ -401,7 +438,7 @@ def _handle_management(
                 tags=routed["tags"],
             ),
         )
-        index_work(db, created)
+        _index_quietly(db, created)
         return f"已新增作品《{created.title}》（id={created.id}），索引已建好。", [
             created.id
         ]
@@ -456,7 +493,7 @@ def _handle_management(
     if updated is None:
         return f"更新《{old_title}》失败，作品可能已被删除。", []
 
-    index_work(db, updated)  # 抬头/标签变了要重建索引，否则检索命中旧元数据
+    _index_quietly(db, updated)  # 抬头/标签变了要重建索引，否则检索命中旧元数据
     return f"已把《{old_title}》的{field_label}改为「{value}」。", [work.id]
 
 
@@ -536,6 +573,123 @@ def ask_stream(req: AskRequest, db: Session = Depends(get_db)):
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
+# ---- 设置（给人用的，不是给 AI 用的）--------------------------------------
+# 打包版没有 .env，密钥由用户在界面里填，存到用户目录的 设置.json。
+
+
+def _settings_payload() -> dict:
+    return {
+        "configured": user_config.configured(),
+        "keys": user_config.masked(),
+        "labels": user_config.LABELS,
+        "storage": user_config.storage_hint(),
+        # 打包版才给「退出程序」按钮：容器/开发环境里退出没有意义
+        "portable": IS_FROZEN,
+    }
+
+
+@app.get("/settings")
+def read_settings():
+    return _settings_payload()
+
+
+@app.put("/settings")
+def update_settings(payload: SettingsUpdate, db: Session = Depends(get_db)):
+    """保存密钥 → 立刻生效 → 顺手把之前没索引成功的作品补上。
+
+    补索引放在这里而不是后台任务：作品通常只有几条，同步做完再返回，
+    用户看到「已为 N 条作品建好索引」比等一个看不见的后台任务更安心。
+    """
+    updates = payload.model_dump(exclude_none=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="没有要保存的字段")
+
+    user_config.save(updates)
+    user_config.apply()
+
+    return {**_settings_payload(), "indexed_works": _reindex_all(db)}
+
+
+@app.post("/settings/test")
+def test_settings(payload: SettingsUpdate):
+    """逐个服务探活：用户填错哪把钥匙，一眼看得出来。
+
+    三个探测都是「不消耗生成额度」的调用（列模型 / 一次极短向量化），
+    所以点几次也不心疼。
+    """
+    probes = {
+        "deepseek_api_key": ("DeepSeek（对话）", llm.ping),
+        "embedding_api_key": ("硅基流动（向量化）", embedding.ping),
+        "gpt_api_key": ("视觉模型（图片描述）", vision.ping),
+    }
+    provided = payload.model_dump(exclude_none=True)
+    results: list[dict] = []
+
+    for key, (label, probe) in probes.items():
+        if key in provided:
+            # 先临时灌进去再探活，失败要还原，避免把没验证过的密钥留在内存里
+            original = getattr(settings, key)
+            setattr(settings, key, str(provided[key] or "").strip())
+            _reload_clients()
+            try:
+                probe()
+                results.append({"service": label, "ok": True, "message": "连接正常"})
+            except errors.NotConfigured:
+                results.append({"service": label, "ok": False, "message": "没有填密钥"})
+            except Exception as exc:  # noqa: BLE001 — 探活要如实回报任何失败原因
+                results.append({"service": label, "ok": False, "message": str(exc)[:200]})
+            finally:
+                setattr(settings, key, original)
+                _reload_clients()
+        elif getattr(settings, key):
+            try:
+                probe()
+                results.append({"service": label, "ok": True, "message": "连接正常"})
+            except Exception as exc:  # noqa: BLE001 — 同上
+                results.append({"service": label, "ok": False, "message": str(exc)[:200]})
+        else:
+            results.append({"service": label, "ok": False, "message": "还没有填"})
+
+    return {"results": results}
+
+
+def _reload_clients() -> None:
+    llm.reload()
+    embedding.reload()
+    vision.reload()
+
+
+def _reindex_all(db: Session) -> int:
+    """把库里所有作品重建索引，返回成功的条数。
+
+    没配向量化密钥时直接返回 0，不报错——用户可能只填了对话密钥。
+    """
+    if not settings.embedding_api_key:
+        return 0
+
+    done = 0
+    for work in db.query(Work).all():
+        try:
+            index_work(db, work)
+            done += 1
+        except (errors.NotConfigured, RuntimeError):
+            break  # 密钥/网络有问题就停，别对着每条作品重复失败
+    return done
+
+
+@app.post("/quit")
+def quit_app():
+    """打包版专用：关窗口不会结束进程，需要一个显式的退出口。
+
+    延迟 0.3 秒再退出，是为了先把 HTTP 200 发回去——否则前端只会看到「连接被重置」。
+    """
+    if not IS_FROZEN:
+        raise HTTPException(status_code=400, detail="只有打包版支持退出")
+
+    threading.Timer(0.3, lambda: os._exit(0)).start()
+    return {"ok": True}
+
+
 # 前端静态托管。必须放在所有 API 路由之后：
 # FastAPI 先匹配已注册的路由，匹配不到才落到这个 mount，
 # 所以 /works、/ask、/docs 不会被它吃掉。
@@ -543,6 +697,11 @@ def ask_stream(req: AskRequest, db: Session = Depends(get_db)):
 # 为什么同源托管：手机上访问时，"127.0.0.1" 指的是手机自己而不是电脑。
 # 前后端同源后前端用相对路径请求，一个地址（如 http://<电脑IP>:8000）就够，
 # 也不用再配 CORS。
-FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
+if IS_FROZEN:
+    # PyInstaller 把 frontend 解到临时目录（sys._MEIPASS），不再是仓库相对位置
+    FRONTEND_DIR = Path(getattr(sys, "_MEIPASS", ".")) / "frontend"
+else:
+    FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
+
 if FRONTEND_DIR.is_dir():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")

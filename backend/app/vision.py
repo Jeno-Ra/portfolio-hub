@@ -14,6 +14,7 @@ from pathlib import Path
 from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 
 from backend.app.config import settings
+from backend.app.errors import NotConfigured
 
 MAX_RETRIES = 2
 
@@ -24,12 +25,37 @@ VISION_PROMPT = (
     "150 字以内，只描述看得见的东西，不要评价、不要猜测用途、不要分点。"
 )
 
-_client = OpenAI(
-    api_key=settings.gpt_api_key,
-    base_url=settings.gpt_base_url,
-    timeout=settings.vision_timeout,
-    max_retries=0,
-)
+# 懒加载：没填视觉密钥时不影响其他功能，只在真的描述图片时报错
+_client: OpenAI | None = None
+
+
+def _make_client() -> OpenAI:
+    if not settings.gpt_api_key:
+        raise NotConfigured("还没有填视觉模型的密钥，点右上角「设置」填上就能描述图片了")
+    return OpenAI(
+        api_key=settings.gpt_api_key,
+        base_url=settings.gpt_base_url,
+        timeout=settings.vision_timeout,
+        max_retries=0,
+    )
+
+
+def _get_client() -> OpenAI:
+    global _client
+    if _client is None:
+        _client = _make_client()
+    return _client
+
+
+def reload() -> None:
+    """密钥变更后调用，下次请求用新密钥重建客户端。"""
+    global _client
+    _client = None
+
+
+def ping() -> None:
+    """探活：列一次模型列表，不消耗生成额度。"""
+    _get_client().models.list()
 
 
 def describe_image(path: str | Path) -> str:
@@ -45,7 +71,7 @@ def describe_image(path: str | Path) -> str:
     last_error: Exception | None = None
     for attempt in range(MAX_RETRIES + 1):
         try:
-            resp = _client.chat.completions.create(
+            resp = _get_client().chat.completions.create(
                 model=settings.gpt_model,
                 messages=[
                     {

@@ -28,7 +28,7 @@
 | `infra/`         | Dockerfile                                    |
 | `eval/`          | 评测语料、50 条评测集与评测脚本                |
 | `mobile/`        | Android 外壳（Capacitor）：`sync-web.mjs` + `android/` |
-| `desktop/`       | Windows 桌面客户端（Edge `--app` 启动器 + 图标） |
+| `desktop/`       | Windows 端：Edge `--app` 启动器、图标、`portable.py` + `build.ps1`（打包成单文件 exe） |
 | `scripts/`       | `deploy.ps1` 一键部署脚本                     |
 | `docs/`          | 部署指南（备份恢复、故障排查）                |
 | `docker-compose.yml` | 三服务编排（backend + postgres + chroma） |
@@ -47,6 +47,10 @@
 | POST   | `/works/ingest`     | 从服务器上的路径录入（脚本 / `docker cp` 场景）    |
 | POST   | `/ask`              | 提问：意图路由 → 检索 → 大模型，返回答案与引用     |
 | POST   | `/ask/stream`       | 同上，SSE 流式返回（meta → delta → done）         |
+| GET    | `/settings`         | 读密钥配置（只回显 `****后4位`）与数据目录         |
+| PUT    | `/settings`         | 写密钥并热重载客户端，返回重建索引的作品数         |
+| POST   | `/settings/test`    | 逐个探活三个服务（不耗生成额度）                   |
+| POST   | `/quit`             | 退出桌面版（仅 exe 内可用），先回 200 再关进程      |
 
 `/works` 返回字段：`id` / `title` / `type` / `content` / `tags` / `source_path` / `created_at`。
 `tags` 传名字即可，服务端会自动建标签并在 `work_tags` 里建立关联。
@@ -110,8 +114,69 @@ cp .env.example .env
 | `GPT_MODEL`         |      | `gpt-6.1-terra`            | 视觉模型名                              |
 | `POSTGRES_PASSWORD` |      | `portfolio_dev_password`   | 仅 docker compose 使用                  |
 | `MEDIA_DIR`         |      | `backend/media`            | 上传副本存放目录（容器里是 `/app/data/media`） |
+| `PORTFOLIO_DATA_DIR`|      | `%LOCALAPPDATA%\作品集`    | 桌面版的全部数据（库 / 向量 / 上传副本 / 设置），设了就当绿色版 |
 
 > `.env` 已写入 `.gitignore`，不会进入版本库；`.env.example` 只含变量名，可安全提交。
+
+## 给别人用：一个 exe，双击就行
+
+前面几种方式都要求对方会装 Docker、会填 `.env`、会敲命令。如果只是想把作品集交到一个
+**完全不懂技术的人**手里，用这一个文件：
+
+```powershell
+.\desktop\build.ps1          # 产物：desktop\dist\作品集.exe（单文件，83.5 MB）
+```
+
+双击 `作品集.exe` 会发生什么：
+
+1. 进程在 `127.0.0.1:8765` 起一个完整的后端（FastAPI + 前端页面 + 嵌入式向量库 + SQLite），
+   不需要 Docker、不需要装 Python、不联网也能启动；
+2. 用系统自带的 Edge 以 `--app` 模式开一个无地址栏窗口（没有 Edge 就退回默认浏览器）；
+3. 三个密钥没填过 → 自动弹出「设置」向导，填完点保存，作品会立刻补建索引；
+4. 之后就是正常用：拖文件进来、提问、看引用。右上角「设置」可以随时改密钥，还能「测试连接」；
+5. 点「退出程序」= 关掉后端进程（`POST /quit`），不是只关窗口。
+
+对方需要知道的只有三件事：**双击、填一次密钥、数据在哪**（`使用说明.txt` 里都写了）。
+数据全部落在 `%LOCALAPPDATA%\作品集\`：
+
+| 文件              | 是什么                                   |
+| ----------------- | ---------------------------------------- |
+| `作品集.db`       | 作品、标签、对话记录（SQLite）           |
+| `向量库\`         | 嵌入式 Chroma，检索用                     |
+| `作品文件\`       | 网页上传的文件副本（删作品时一起删）      |
+| `设置.json`       | 三个密钥（只存本机，`masked` 回显后 4 位）|
+| `运行日志.txt`    | 出问题时的报错，让人发这个文件过来即可    |
+
+想让整包变成**绿色版**（数据跟着 exe 走，放 U 盘里）：设一个环境变量再启动——
+
+```powershell
+$env:PORTFOLIO_DATA_DIR = "D:\作品集数据"
+.\作品集.exe
+```
+
+实测（同一台机器、真实密钥）：
+
+| 项目                     | 结果                                   |
+| ------------------------ | -------------------------------------- |
+| 双击到页面可用           | **4.8 秒**（含建库、起服务）           |
+| 保存密钥（热重载）       | 0.1 秒，三个服务 `configured` 全 true   |
+| 新建一条作品（建索引）   | 0.7 秒                                  |
+| 拖文件上传（multipart）  | **201**，标题自动取文件名               |
+| 提问命中                 | 0.9 秒，答案带 `[1]` 引用               |
+| 退出后再打开             | 作品、向量、密钥都还在                  |
+| 单文件体积               | 83.5 MB（PyInstaller `--onefile`）      |
+
+打包时踩过的坑（都写在 `desktop/build.ps1` 里了，别重犯）：
+
+- 必须 `--paths <仓库根>`，否则 `ModuleNotFoundError: No module named 'backend'`；
+- 必须 `--collect-submodules chromadb`，否则运行时报
+  `ModuleNotFoundError: No module named 'chromadb.telemetry.product.posthog'`
+  （chromadb 按配置字符串动态 import，静态分析看不到）；
+- `--icon` / `--add-data` 一律写**绝对路径**，相对路径会被解析到 `--workpath` 下面；
+- 只打包 `backend/` + `frontend/`，不打包 `mobile/`、`desktop/build/`、`desktop/dist/`。
+
+局限（如实写）：只出 Windows 版；单机使用（别人想手机看，还是用 Tailscale 那套访问 8000）；
+没有 nginx，所以不带 80 端口与反向代理。
 
 ## 快速开始
 

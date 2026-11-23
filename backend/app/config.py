@@ -1,9 +1,29 @@
+import os
+import sys
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP_DIR = Path(__file__).resolve().parent  # ...\backend\app
 PROJECT_ROOT = APP_DIR.parent.parent  # ...\portfolio-hub
+
+# 打包成 exe 之后没有仓库目录，也不能假设有写权限（可能放在 Program Files 下）。
+# 这种情况数据统一落到 %LOCALAPPDATA%\作品集，重装/升级 exe 都不会丢。
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+
+
+def _data_dir() -> str:
+    """数据根目录。留空表示用仓库内的默认路径（开发模式）。"""
+    explicit = os.environ.get("PORTFOLIO_DATA_DIR", "").strip()
+    if explicit:
+        return explicit
+    if IS_FROZEN:
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home())
+        return str(Path(base) / "作品集")
+    return ""
+
+
+DATA_DIR = _data_dir()
 
 
 class Settings(BaseSettings):
@@ -13,31 +33,34 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    deepseek_api_key: str
+    # 密钥留空是允许的：打包版第一次运行时还没有任何密钥，
+    # 由界面里的「设置」写进 设置.json，再通过 user_config.apply() 灌回来。
+    # 真正调用服务时才检查，缺失时抛 errors.NotConfigured → 400。
+    deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
     llm_timeout: int = 5
     llm_total_budget: int = 30
 
     # 向量化服务（硅基流动，OpenAI 兼容接口）
-    embedding_api_key: str
+    embedding_api_key: str = ""
     embedding_base_url: str = "https://api.siliconflow.cn/v1"
     embedding_model: str = "BAAI/bge-m3"
     embedding_dim: int = 1024  # bge-m3 输出维度，换模型必须同步改并重建向量库
     embedding_batch: int = 32  # 每次请求提交多少条，太大容易被限流
 
     # 视觉服务（图片 → 文字描述），走 OpenAI 兼容接口
-    gpt_api_key: str
+    gpt_api_key: str = ""
     gpt_base_url: str = "https://api.openai.com/v1"
     gpt_model: str = "gpt-6.1-terra"
     vision_timeout: int = 120  # 单张图 4–5 秒，留足余量给大图
 
-    # 数据落盘位置。留空 = 用 backend/ 下的默认路径（本地开发）。
-    # 容器里由 compose 注入 /app/data/...，这样数据在命名卷里，重建容器不丢。
-    db_path: str = ""
-    chroma_dir: str = ""
+    # 数据落盘位置。留空 = 用 backend/ 下的默认路径（本地开发）；
+    # 打包版默认落到 %LOCALAPPDATA%\作品集；容器里由 compose 注入 /app/data/...
+    db_path: str = f"{DATA_DIR}/作品集.db" if DATA_DIR else ""
+    chroma_dir: str = f"{DATA_DIR}/向量库" if DATA_DIR else ""
     # 浏览器上传的原件存在这里（图片/PDF 等）。留空 = backend/media。
-    media_dir: str = ""
+    media_dir: str = f"{DATA_DIR}/作品文件" if DATA_DIR else ""
 
     # 关系库连接串。留空 = 用本地 SQLite（开发默认）；
     # 容器里由 compose 注入 postgresql+psycopg://... 指向 postgres 服务。

@@ -3,16 +3,43 @@ import time
 from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 
 from backend.app.config import settings
+from backend.app.errors import NotConfigured
 
 MAX_RETRIES = 4
 FALLBACK = "抱歉，大模型服务出错，请检查"
 
-_client = OpenAI(
-    api_key=settings.deepseek_api_key,
-    base_url=settings.deepseek_base_url,
-    timeout=settings.llm_timeout,
-    max_retries=0,  # 关闭 SDK 内置重试，重试权统一由 chat() 控制
-)
+# 懒加载：打包版启动时可能一个密钥都没有，这时构造 OpenAI 客户端会直接报错。
+# 第一次真正调用才建连接池；用户填完密钥后 reload() 让它重建。
+_client: OpenAI | None = None
+
+
+def _make_client() -> OpenAI:
+    if not settings.deepseek_api_key:
+        raise NotConfigured("还没有填 DeepSeek 密钥，点右上角「设置」填上就能对话了")
+    return OpenAI(
+        api_key=settings.deepseek_api_key,
+        base_url=settings.deepseek_base_url,
+        timeout=settings.llm_timeout,
+        max_retries=0,  # 关闭 SDK 内置重试，重试权统一由 chat() 控制
+    )
+
+
+def _get_client() -> OpenAI:
+    global _client
+    if _client is None:
+        _client = _make_client()
+    return _client
+
+
+def reload() -> None:
+    """密钥变更后调用，下次请求用新密钥重建客户端。"""
+    global _client
+    _client = None
+
+
+def ping() -> None:
+    """探活：列一次模型列表，不消耗生成额度。密钥填错会在这里抛异常。"""
+    _get_client().models.list()
 
 # 助手的身份与工作准则。改这里就能换"人设"，不用动业务代码。
 PERSONA = (
@@ -57,7 +84,7 @@ def chat(prompt: str, context: str = "") -> str:
             break
 
         try:
-            resp = _client.chat.completions.create(
+            resp = _get_client().chat.completions.create(
                 model=settings.deepseek_model,
                 messages=[
                     {"role": "system", "content": system},
@@ -84,7 +111,7 @@ def raw_chat(system: str, prompt: str) -> str:
     复用同一个 client，但只有一次尝试：解析失败时调用方会回退成 search，
     没必要为了一个可能失败的分类任务重试 4 次。
     """
-    resp = _client.chat.completions.create(
+    resp = _get_client().chat.completions.create(
         model=settings.deepseek_model,
         messages=[
             {"role": "system", "content": system},
@@ -104,7 +131,7 @@ def chat_stream(prompt: str, context: str = ""):
     所以这里让异常直接抛给调用方，由它转成一个 error 事件。
     """
     system = build_system(context)
-    stream = _client.chat.completions.create(
+    stream = _get_client().chat.completions.create(
         model=settings.deepseek_model,
         messages=[
             {"role": "system", "content": system},
