@@ -1,5 +1,7 @@
 # 作品集（PortfolioHub）
 
+[![CI](https://github.com/Jeno-Ra/portfolio-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/Jeno-Ra/portfolio-hub/actions/workflows/ci.yml)
+
 把散落在各处的作品（视频 / 图片 / 文本 / 代码）汇总成一个可检索、可自然语言管理的多模态作品集。
 
 ## 技术栈
@@ -13,7 +15,7 @@
 | 向量检索    | Chroma（嵌入式开发 / 独立服务编排）           |
 | 前端        | 原生 HTML + CSS + JS（无框架）                |
 | 质量        | pytest + Ruff + GitHub Actions                |
-| 部署        | Docker 多阶段构建 + docker-compose + 云服务器 |
+| 部署        | Docker 多阶段构建 + docker-compose + 自托管（局域网 / Tailscale） |
 
 ## 目录结构
 
