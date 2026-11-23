@@ -27,6 +27,10 @@
 | `frontend/`      | 原生单页前端                                  |
 | `infra/`         | Dockerfile                                    |
 | `eval/`          | 评测语料、50 条评测集与评测脚本                |
+| `mobile/`        | Android 外壳（Capacitor）：`sync-web.mjs` + `android/` |
+| `desktop/`       | Windows 桌面客户端（Edge `--app` 启动器 + 图标） |
+| `scripts/`       | `deploy.ps1` 一键部署脚本                     |
+| `docs/`          | 部署指南（备份恢复、故障排查）                |
 | `docker-compose.yml` | 三服务编排（backend + postgres + chroma） |
 
 ## 接口
@@ -110,6 +114,20 @@ cp .env.example .env
 > `.env` 已写入 `.gitignore`，不会进入版本库；`.env.example` 只含变量名，可安全提交。
 
 ## 快速开始
+
+### 方式零：一条命令（推荐）
+
+```powershell
+Copy-Item .env.example .env    # 先填三个密钥
+.\scripts\deploy.ps1
+```
+
+脚本会：查 Docker（没起就拉起 Docker Desktop）→ 查 `.env` 和密钥 → 起容器 →
+轮询 `/health` 直到**真的**能访问 → 打印本机 / Tailscale / 局域网三种地址。
+
+实测：容器全停时 **15.7 秒**；连 Docker Desktop 都关了也能自动拉起，**32.8 秒**。
+
+完整说明（备份恢复、换机器、9 条故障排查）见 [docs/部署.md](docs/部署.md)。
 
 ### 方式一：本地跑（SQLite + 嵌入式向量库）
 
