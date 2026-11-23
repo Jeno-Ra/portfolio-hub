@@ -63,6 +63,17 @@ def client():
         yield test_client
 
 
+def body(response):
+    """取出信封里的 `data`，顺带断言 `code == 0`。
+
+    所有用例都从这里拿数据，等于给"统一返回格式"上了一道全站检查：
+    哪个接口忘了套信封，测试立刻挂，而不是等前端拿不到字段才发现。
+    """
+    payload = response.json()
+    assert payload["code"] == 0, payload
+    return payload["data"]
+
+
 @pytest.fixture
 def sample_work(client):
     """一条现成的作品，多数用例从这里起步。"""
@@ -76,4 +87,4 @@ def sample_work(client):
         },
     )
     assert response.status_code == 201
-    return response.json()
+    return body(response)

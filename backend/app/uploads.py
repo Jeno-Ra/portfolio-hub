@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import UploadFile
 
 from .config import APP_DIR, settings
+from .files import CONVERT_FIRST, SUPPORTED
 
 # 留空则落在 backend/media（本地开发）；容器里由 compose 注入 /app/data/media（命名卷）
 MEDIA_DIR = Path(settings.media_dir) if settings.media_dir else APP_DIR.parent / "media"
@@ -27,12 +28,59 @@ CHUNK = 1024 * 1024  # 1 MB 一片
 # 文件名里不允许出现的字符（Windows 保留字符 + 控制符）
 _ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
+# 图片 / 视频不走正文解析：图片交给视觉模型描述，视频只存元数据
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv"}
+
+# 上传白名单 = 能解析正文的 + 能描述/存元数据的。不在其中的（.exe / .zip / .psd…）直接拒，
+# 免得用户传上来一个"能存但永远搜不到任何内容"的作品，还以为索引坏了。
+ALLOWED_SUFFIXES = SUPPORTED | IMAGE_SUFFIXES | VIDEO_SUFFIXES
+
+# 图片的魔数：防止把 .mkv 改名成 .png 传上来，视觉模型那边只会得到一句"解码失败"
+_IMAGE_MAGIC = {
+    ".png": (b"\x89PNG\r\n\x1a\n",),
+    ".jpg": (b"\xff\xd8\xff",),
+    ".jpeg": (b"\xff\xd8\xff",),
+    ".gif": (b"GIF87a", b"GIF89a"),
+    ".bmp": (b"BM",),
+}
+
 
 def safe_name(name: str) -> str:
     """只保留文件名本身，替换非法字符。"""
     base = Path(name or "").name
     base = _ILLEGAL.sub("_", base).strip(". ")
     return base[:120] or "file"
+
+
+def check_suffix(name: str) -> str:
+    """按扩展名做第一道校验，返回小写扩展名。不合法抛 ValueError（由路由转 400）。"""
+    suffix = Path(name or "").suffix.lower()
+    if suffix in CONVERT_FIRST:
+        raise ValueError(f"暂不支持 {suffix}：{CONVERT_FIRST[suffix]}")
+    if suffix not in ALLOWED_SUFFIXES:
+        raise ValueError(
+            f"不支持的文件类型：{suffix or '（无扩展名）'}。"
+            "可以传图片、视频、PDF / Word / PPT / Excel、纯文本或代码文件"
+        )
+    return suffix
+
+
+def check_image(name: str, path: Path) -> None:
+    """图片还要看魔数：扩展名和内容对不上时早点拒，别让视觉模型去猜。"""
+    suffix = Path(name or "").suffix.lower()
+    magics = _IMAGE_MAGIC.get(suffix)
+    if not magics:
+        return
+    with path.open("rb") as handle:
+        head = handle.read(16)
+    if suffix == ".webp":
+        ok = head[:4] == b"RIFF" and head[8:12] == b"WEBP"
+    else:
+        ok = any(head.startswith(magic) for magic in magics)
+    if not ok:
+        raise ValueError(f"{Path(name).name} 的后缀是 {suffix}，但内容不像图片（扩展名被改过？）")
+
 
 
 def save_upload(upload: UploadFile) -> Path:

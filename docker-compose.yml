@@ -39,6 +39,8 @@ services:
       # 向量库指向 chroma 服务（服务端模式），不再用容器内的嵌入式库
       CHROMA_HOST: chroma
       CHROMA_PORT: "8000"
+      # 容器默认 UTC，日志里的 ts 会差 8 小时；设成东八区，和手机/电脑对得上
+      TZ: Asia/Shanghai
     volumes:
       - appdata:/app/data
     depends_on:

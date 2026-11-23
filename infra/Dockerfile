@@ -39,10 +39,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH"
 
 # Debian 官方源在国内很慢（实测 3 分钟），换清华源
+# libgomp1：chroma/onnx 运行时要的 OpenMP
+# tzdata：日志时间戳要按 TZ=Asia/Shanghai 显示，镜像里默认没有时区库
 RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' \
         /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 \
+    && apt-get install -y --no-install-recommends libgomp1 tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # 先建用户，后面用 COPY --chown 直接给权限（不要再 chown -R）

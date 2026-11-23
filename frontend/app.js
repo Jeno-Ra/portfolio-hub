@@ -37,6 +37,12 @@ const tplWork = $("tpl-work");
 const tplMessage = $("tpl-message");
 
 /* ---------- 统一请求封装 ---------- */
+/**
+ * 所有 JSON 接口都回 {code, message, data}。
+ * - code === 0 才算成功，返回 data（调用方拿到的还是原来那个对象，不用到处拆包）；
+ * - 失败时抛 Error(message)，message 是后端写好的中文话术，直接可以 toast 出来。
+ * 状态码另外保留：网络层错误（网关 502、超时）没有信封，也走同一个 catch。
+ */
 async function api(path, options = {}) {
   // 上传文件时不能手动设 Content-Type：浏览器要自己拼 multipart 的 boundary
   const isForm = options.body instanceof FormData;
@@ -48,20 +54,15 @@ async function api(path, options = {}) {
     headers,
   });
 
-  if (res.status === 204) return null;
+  const payload = await res.json().catch(() => null);
 
-  const data = await res.json().catch(() => null);
-
-  if (!res.ok) {
-    // FastAPI 的校验错误是数组，其余是字符串
-    let msg = `请求失败（${res.status}）`;
-    if (typeof data?.detail === "string") msg = data.detail;
-    else if (Array.isArray(data?.detail)) {
-      msg = data.detail.map((d) => d.msg).join("；");
-    }
-    throw new Error(msg);
+  if (!payload) {
+    throw new Error(`请求失败（${res.status}），服务可能没起来`);
   }
-  return data;
+  if (payload.code !== 0) {
+    throw new Error(payload.message || `请求失败（${res.status}）`);
+  }
+  return payload.data;
 }
 
 /* ---------- 轻提示 ---------- */
@@ -506,7 +507,11 @@ async function askStream(question) {
       cache: "no-store",
       body: JSON.stringify({ question }),
     });
-    if (!resp.ok || !resp.body) throw new Error(`请求失败（${resp.status}）`);
+    if (!resp.ok || !resp.body) {
+      // 流还没开始就失败（参数错、没填密钥）：这时回的是信封，取出里面的话术
+      const failure = await resp.json().catch(() => null);
+      throw new Error(failure?.message || `请求失败（${resp.status}）`);
+    }
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();

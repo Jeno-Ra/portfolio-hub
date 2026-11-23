@@ -6,6 +6,7 @@
 """
 
 from backend.app import main, vector_store
+from backend.tests.conftest import body
 from backend.tests.fakes import CALLS, FAKE_HITS
 
 
@@ -60,7 +61,7 @@ def test_all_hits_filtered_out_falls_back_to_refusal(client, sample_work):
     """5 条命中但全部超阈值：等于没找到，不能调模型，也不能给引用。"""
     FAKE_HITS.extend(make_hit(999, index, 0.60) for index in range(5))
 
-    data = client.post("/ask", json={"question": "长城拍了多少个镜头"}).json()
+    data = body(client.post("/ask", json={"question": "长城拍了多少个镜头"}))
 
     assert data["sources"] == []
     assert "没有找到" in data["answer"]
@@ -69,10 +70,12 @@ def test_all_hits_filtered_out_falls_back_to_refusal(client, sample_work):
 
 def test_sources_dedup_chunks_of_same_work(client, sample_work):
     """一条作品切成多片会同时命中，引用里只能出现一次。"""
-    other = client.post(
-        "/works",
-        json={"title": "茶室空镜", "type": "text", "content": "午后茶室的空镜素材。"},
-    ).json()
+    other = body(
+        client.post(
+            "/works",
+            json={"title": "茶室空镜", "type": "text", "content": "午后茶室的空镜素材。"},
+        )
+    )
 
     FAKE_HITS.extend(
         [
@@ -82,7 +85,7 @@ def test_sources_dedup_chunks_of_same_work(client, sample_work):
         ]
     )
 
-    data = client.post("/ask", json={"question": "长城那天的素材"}).json()
+    data = body(client.post("/ask", json={"question": "长城那天的素材"}))
 
     assert data["sources"] == [sample_work["id"], other["id"]]  # 去重且保序
 

@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     作品集自托管一键部署：检查环境 -> 启动容器 -> 等到真的能访问 -> 打印地址。
 
@@ -206,7 +206,8 @@ $sw = [System.Diagnostics.Stopwatch]::StartNew()
 while ($sw.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
     try {
         $resp = Invoke-RestMethod "http://127.0.0.1:8000/health" -TimeoutSec 3
-        if ($resp.status -eq "ok") { $healthy = $true; break }
+        # 接口统一回 {code, message, data}，所以真正的内容在 $resp.data 里
+        if ($resp.data.status -eq "ok") { $healthy = $true; break }
     } catch {
         # 还没起来，继续等
     }

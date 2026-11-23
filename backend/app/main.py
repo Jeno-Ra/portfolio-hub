@@ -1,20 +1,17 @@
 import difflib
 import json
+import logging
 import os
 import sys
 import threading
+import time
+import uuid
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from openai import (
-    APIStatusError,
-    AuthenticationError,
-    PermissionDeniedError,
-    RateLimitError,
-)
 from sqlalchemy.orm import Session
 
 from backend.app import (
@@ -22,7 +19,9 @@ from backend.app import (
     embedding,
     errors,
     llm,
+    logging_setup,
     policy,
+    response,
     router,
     user_config,
     vector_store,
@@ -31,9 +30,10 @@ from backend.app import (
 from backend.app.config import IS_FROZEN, settings
 from backend.app.database import get_db, init_db
 from backend.app.embedding import embed_text
-from backend.app.files import extract_text
+from backend.app.files import CODE_SUFFIXES, extract_text
 from backend.app.indexer import index_work
 from backend.app.models import Work
+from backend.app.response import Envelope, ok
 from backend.app.schemas import (
     AskRequest,
     AskResponse,
@@ -43,10 +43,23 @@ from backend.app.schemas import (
     WorkResponse,
     WorkUpdate,
 )
-from backend.app.uploads import is_media_file, safe_name, save_upload
+from backend.app.uploads import (
+    IMAGE_SUFFIXES,
+    VIDEO_SUFFIXES,
+    check_image,
+    check_suffix,
+    is_media_file,
+    safe_name,
+    save_upload,
+)
 from backend.app.vision import describe_image
 
+logging_setup.configure()
+
 app = FastAPI(title="PortfolioHub API", version="0.1.0")
+
+# 全局异常 → 统一信封（4xx/5xx 也长成 {code,message,data}）
+response.install(app)
 
 # 检索参数：TOP_K 决定给模型看几段；MAX_DISTANCE 是"库里没有相关内容"的判据。
 # 0.45 来自实测校准：相关组 0.320–0.384，无关组 0.510–0.654，取中间偏相关侧。
@@ -61,6 +74,41 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+access_log = logging.getLogger("portfolio.access")
+
+# 静态资源不打日志：一次页面加载就三行，会把真正的接口请求埋掉
+QUIET_PATHS = ("/style.css", "/app.js", "/favicon.ico")
+
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    """给每个请求一个请求号，并记录「一行一条」的结构化访问日志。
+
+    请求号同时进响应头 `X-Request-ID`：用户截个图就能把「哪一次」说清楚，
+    500 的响应体里也会带上它，和日志里的同一行对得上。
+    """
+    request_id = uuid.uuid4().hex[:8]
+    request.state.request_id = request_id
+    started = time.perf_counter()
+
+    reply = await call_next(request)
+
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+    reply.headers["X-Request-ID"] = request_id
+    if request.url.path not in QUIET_PATHS:
+        # 流式接口的 ms 只算到"开始往外推"为止，不是生成完成的时间
+        access_log.info(
+            "request",
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status": reply.status_code,
+                "ms": elapsed_ms,
+            },
+        )
+    return reply
+
 
 @app.middleware("http")
 async def fresh_frontend(request: Request, call_next):
@@ -70,33 +118,10 @@ async def fresh_frontend(request: Request, call_next):
     改完界面再点「新增」还是旧 JS，表现就是"点了没反应"。这里让 HTML 每次
     都重新验证，静态资源则靠 index.html 里的 ?v= 版本号打破缓存。
     """
-    response = await call_next(request)
-    if response.headers.get("content-type", "").startswith("text/html"):
-        response.headers["Cache-Control"] = "no-cache, must-revalidate"
-    return response
-
-
-@app.exception_handler(errors.NotConfigured)
-async def not_configured_handler(request: Request, exc: errors.NotConfigured):
-    """缺密钥属于「用户还没配置」，不是服务器故障：400 + 可读提示，前端据此引导去设置。"""
-    return JSONResponse(status_code=400, content={"detail": str(exc)})
-
-
-@app.exception_handler(APIStatusError)
-async def upstream_error_handler(request: Request, exc: APIStatusError):
-    """把上游大模型服务的错误翻译成合适的 HTTP 语义。
-
-    Starlette 沿异常类的 MRO 查找处理器，注册在 APIStatusError 上即可
-    覆盖 AuthenticationError / RateLimitError 等全部子类。
-    """
-    if isinstance(exc, (AuthenticationError, PermissionDeniedError)):
-        status, detail = 502, "上游模型服务鉴权失败，请检查 DEEPSEEK_API_KEY"
-    elif isinstance(exc, RateLimitError):
-        status, detail = 429, "上游模型服务限流，请稍后重试"
-    else:
-        status, detail = 502, f"上游模型服务返回错误 {exc.status_code}"
-
-    return JSONResponse(status_code=status, content={"detail": detail})
+    reply = await call_next(request)
+    if reply.headers.get("content-type", "").startswith("text/html"):
+        reply.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return reply
 
 
 # 启动时确保表存在。create_all 是幂等的：缺哪张建哪张，不动已有数据
@@ -119,37 +144,17 @@ def _index_quietly(db: Session, work: Work) -> None:
 
 
 
-@app.get("/health")
+@app.get("/health", response_model=Envelope[dict])
 def health():
-    return {"status": "ok"}
+    return ok({"status": "ok", "version": app.version})
 
 
-@app.post("/works", response_model=WorkResponse, status_code=201)
+@app.post("/works", response_model=Envelope[WorkResponse], status_code=201)
 def create_work(work: WorkCreate, db: Session = Depends(get_db)):
     created = crud.create_work(db, work)
     # 入库后立刻建索引：否则新作品搜不到（之前就是这个坑）
     _index_quietly(db, created)
-    return created
-
-
-IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
-VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv"}
-CODE_SUFFIXES = {
-    ".py",
-    ".js",
-    ".ts",
-    ".tsx",
-    ".jsx",
-    ".java",
-    ".cpp",
-    ".c",
-    ".go",
-    ".rs",
-    ".sql",
-    ".html",
-    ".css",
-    ".sh",
-}
+    return ok(created, "已创建")
 
 
 def _infer_type(path: Path) -> str:
@@ -210,7 +215,7 @@ def _store_work(
     return created
 
 
-@app.post("/works/upload", response_model=WorkResponse, status_code=201)
+@app.post("/works/upload", response_model=Envelope[WorkResponse], status_code=201)
 def upload_work(
     file: UploadFile = File(...),
     cover: UploadFile | None = File(None),
@@ -225,37 +230,65 @@ def upload_work(
     为什么网页必须走这条：`<input type=file>` 只给文件内容，不给本地绝对路径，
     所以"填路径"那种方式在浏览器里根本不成立。`/works/ingest` 留给服务器端场景
     （docker cp 放进去的文件、批量脚本），两边解析逻辑是同一个 `_content_for`。
+
+    两道校验在落盘前后各做一次：
+    - 落盘前看扩展名（白名单），不合规的文件根本不会写进磁盘；
+    - 落盘后看图片魔数，防止 `.png` 其实是改名的视频（视觉模型那边只会报解码失败）。
     """
     original = safe_name(file.filename or "")
+    try:
+        suffix = check_suffix(original)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     try:
         saved = save_upload(file)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    try:
+        if suffix in IMAGE_SUFFIXES:
+            check_image(original, saved)
+    except ValueError as exc:
+        # 落盘了才发现内容不对：这半份副本必须删掉，否则 media/ 会攒垃圾
+        saved.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     saved_cover: Path | None = None
     try:
         if cover is not None and cover.filename:
+            cover_name = safe_name(cover.filename)
+            if Path(cover_name).suffix.lower() not in IMAGE_SUFFIXES:
+                raise HTTPException(
+                    status_code=400, detail="封面只能是图片（png / jpg / webp / gif / bmp）"
+                )
             saved_cover = save_upload(cover)
+            check_image(cover_name, saved_cover)
         work_type = type or _infer_type(saved)
         content = _content_for(work_type, saved, notes, saved_cover)
-    except HTTPException:
+    except (HTTPException, ValueError) as exc:
         # 解析失败就别留下垃圾文件
         saved.unlink(missing_ok=True)
         if saved_cover:
             saved_cover.unlink(missing_ok=True)
+        if isinstance(exc, ValueError):
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         raise
 
-    return _store_work(
-        db,
-        title=title.strip() or Path(original).stem,
-        work_type=work_type,
-        content=content,
-        tags=_split_tags(tags),
-        source=saved,
+    return ok(
+        _store_work(
+            db,
+            title=title.strip() or Path(original).stem,
+            work_type=work_type,
+            content=content,
+            tags=_split_tags(tags),
+            source=saved,
+        ),
+        "已上传",
     )
 
 
-@app.post("/works/ingest", response_model=WorkResponse, status_code=201)
+@app.post("/works/ingest", response_model=Envelope[WorkResponse], status_code=201)
 def ingest_work(payload: IngestRequest, db: Session = Depends(get_db)):
     """按路径录入：文件已经在这台机器上时用（服务器/脚本），浏览器用 `/works/upload`。"""
     path = Path(payload.path)
@@ -263,42 +296,46 @@ def ingest_work(payload: IngestRequest, db: Session = Depends(get_db)):
     cover_path = Path(payload.cover_path) if payload.cover_path else None
     content = _content_for(work_type, path, payload.notes or "", cover_path)
 
-    return _store_work(
-        db,
-        title=payload.title or path.stem,
-        work_type=work_type,
-        content=content,
-        tags=payload.tags,
-        source=path,
+    return ok(
+        _store_work(
+            db,
+            title=payload.title or path.stem,
+            work_type=work_type,
+            content=content,
+            tags=payload.tags,
+            source=path,
+        ),
+        "已录入",
     )
 
 
-
-@app.get("/works", response_model=list[WorkResponse])
+@app.get("/works", response_model=Envelope[list[WorkResponse]])
 def list_works(skip: int = 0, limit: int = 10, db: Session = Depends(get_db)):
-    return crud.list_works(db, skip=skip, limit=limit)
+    works = crud.list_works(db, skip=skip, limit=limit)
+    return ok(works, f"共 {len(works)} 条")
 
 
-@app.get("/works/{work_id}", response_model=WorkResponse)
+@app.get("/works/{work_id}", response_model=Envelope[WorkResponse])
 def get_work(work_id: int, db: Session = Depends(get_db)):
     work = crud.get_work(db, work_id)
     if work is None:
         raise HTTPException(status_code=404, detail="作品不存在")
-    return work
+    return ok(work)
 
 
-@app.patch("/works/{work_id}", response_model=WorkResponse)
+@app.patch("/works/{work_id}", response_model=Envelope[WorkResponse])
 def patch_work(work_id: int, data: WorkUpdate, db: Session = Depends(get_db)):
     work = crud.update_work(db, work_id, data)
     if work is None:
         raise HTTPException(status_code=404, detail="作品不存在")
     # 内容变了要重建索引，否则检索还在命中旧片段
     _index_quietly(db, work)
-    return work
+    return ok(work, "已更新")
 
 
-@app.delete("/works/{work_id}", status_code=204)
+@app.delete("/works/{work_id}", response_model=Envelope[dict])
 def remove_work(work_id: int, db: Session = Depends(get_db)):
+    """删除走 200 + 信封而不是 204：204 不能带响应体，前端就没法统一按 code 判断。"""
     work = crud.get_work(db, work_id)
     if work is None:
         raise HTTPException(status_code=404, detail="作品不存在")
@@ -310,6 +347,8 @@ def remove_work(work_id: int, db: Session = Depends(get_db)):
     # 只清 media/ 里我们自己存的那份副本；用户原始文件永远不碰
     if source is not None and is_media_file(source):
         source.unlink(missing_ok=True)
+
+    return ok({"id": work_id}, "已删除")
 
 
 def _catalog(db: Session, limit: int = 50) -> str:
@@ -497,7 +536,7 @@ def _handle_management(
     return f"已把《{old_title}》的{field_label}改为「{value}」。", [work.id]
 
 
-@app.post("/ask", response_model=AskResponse)
+@app.post("/ask", response_model=Envelope[AskResponse])
 def ask(req: AskRequest, db: Session = Depends(get_db)):
     """先判意图，再分发：search 走 RAG，其余走管理动作。"""
     routed = router.route(req.question)
@@ -523,11 +562,12 @@ def ask(req: AskRequest, db: Session = Depends(get_db)):
     crud.add_message(db, conversation.id, "user", req.question)
     crud.add_message(db, conversation.id, "assistant", answer)
 
-    return AskResponse(
+    payload = AskResponse(
         answer=answer,
         conversation_id=conversation.id,
         sources=sources,
     )
+    return ok(payload, "已回答")
 
 
 def _sse(event: str, payload: dict) -> str:
@@ -541,6 +581,8 @@ def ask_stream(req: AskRequest, db: Session = Depends(get_db)):
 
     说明：EventSource 只支持 GET 且不能带请求体，所以前端用 fetch + ReadableStream
     自己解析 SSE，而不是用浏览器的 EventSource。
+
+    唯一不套信封的接口：这本身就是一条事件流，外面再包一层 JSON 就没法边生成边发了。
     """
     relevant = _retrieve(req.question)
     sources = list(dict.fromkeys(hit["work_id"] for hit in relevant))
@@ -588,12 +630,12 @@ def _settings_payload() -> dict:
     }
 
 
-@app.get("/settings")
+@app.get("/settings", response_model=Envelope[dict])
 def read_settings():
-    return _settings_payload()
+    return ok(_settings_payload())
 
 
-@app.put("/settings")
+@app.put("/settings", response_model=Envelope[dict])
 def update_settings(payload: SettingsUpdate, db: Session = Depends(get_db)):
     """保存密钥 → 立刻生效 → 顺手把之前没索引成功的作品补上。
 
@@ -607,10 +649,11 @@ def update_settings(payload: SettingsUpdate, db: Session = Depends(get_db)):
     user_config.save(updates)
     user_config.apply()
 
-    return {**_settings_payload(), "indexed_works": _reindex_all(db)}
+    indexed = _reindex_all(db)
+    return ok({**_settings_payload(), "indexed_works": indexed}, f"已保存，为 {indexed} 条作品重建了索引")
 
 
-@app.post("/settings/test")
+@app.post("/settings/test", response_model=Envelope[dict])
 def test_settings(payload: SettingsUpdate):
     """逐个服务探活：用户填错哪把钥匙，一眼看得出来。
 
@@ -650,7 +693,9 @@ def test_settings(payload: SettingsUpdate):
         else:
             results.append({"service": label, "ok": False, "message": "还没有填"})
 
-    return {"results": results}
+    failed = [item["service"] for item in results if not item["ok"]]
+    message = "全部连接正常" if not failed else f"{'、'.join(failed)} 没通过"
+    return ok({"results": results}, message)
 
 
 def _reload_clients() -> None:
@@ -677,7 +722,7 @@ def _reindex_all(db: Session) -> int:
     return done
 
 
-@app.post("/quit")
+@app.post("/quit", response_model=Envelope[dict])
 def quit_app():
     """打包版专用：关窗口不会结束进程，需要一个显式的退出口。
 
@@ -687,7 +732,7 @@ def quit_app():
         raise HTTPException(status_code=400, detail="只有打包版支持退出")
 
     threading.Timer(0.3, lambda: os._exit(0)).start()
-    return {"ok": True}
+    return ok({"exit": True}, "正在退出")
 
 
 # 前端静态托管。必须放在所有 API 路由之后：
