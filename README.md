@@ -422,6 +422,23 @@ uv run ruff check .  # 静态检查
 | `test_api.py`      | 健康检查、作品增删改查与 404、AI 只能改标题不能改内容、删除二次确认、网页上传落盘/入库/删副本清理、检索未命中不调模型、命中时上下文含目录与片段、流式事件顺序 `meta → delta×N → done`（10 条） |
 | `test_retrieval.py` | 距离阈值过滤（0.45 闭区间）、top-k 与问题向量传参、命中全被过滤时回退拒绝、同一作品多片段去重、引用编号与 sources 同序、上下文含目录+片段（6 条） |
 
+## 持续集成
+
+`.github/workflows/ci.yml`——push 到 `main`、提交 PR、手动触发都会跑，两个 job 并行：
+
+| job | 做什么 | 实测耗时 |
+| --- | ------ | -------- |
+| Ruff | `uv run ruff check .` | 9 s |
+| Pytest | `uv run pytest -q`（24 条） | 15 s |
+
+整个 run **18 秒**（并行执行），徽章在标题下方。
+
+三个刻意的选择：
+
+- **`uv sync --frozen`**：严格按 `uv.lock` 装依赖，锁文件和 `pyproject.toml` 不一致就直接失败。否则会出现「本地能跑、CI 装了另一个版本」这种最难查的问题。
+- **`setup-uv` 开缓存**：第二次以后装依赖走缓存，不用每次重新解析。
+- **CI 里没有任何 secrets**：测试全程不联网（embedding / LLM / 向量库都是假实现），所以不需要配 `DEEPSEEK_API_KEY` 之类的东西，也不会把密钥写进仓库。
+
 ## 已知取舍
 
 | 取舍 | 原因 |
