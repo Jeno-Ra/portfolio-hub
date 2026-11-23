@@ -8,7 +8,7 @@
     rel="icon"
     href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f7cff'/%3E%3Ctext x='16' y='23' font-size='18' font-family='sans-serif' text-anchor='middle' fill='white'%3E作%3C/text%3E%3C/svg%3E"
   >
-  <link rel="stylesheet" href="style.css?v=6">
+  <link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
   <header class="topbar">
@@ -128,17 +128,19 @@
   <!-- ===== 素材弹窗：拖文件进来即可，类型由扩展名决定 ===== -->
   <dialog class="modal" id="asset-modal">
     <form class="modal__body" id="asset-form">
-      <h2 class="modal__title">添加素材</h2>
+      <h2 class="modal__title" id="asset-modal-title">添加素材</h2>
 
-      <div class="dropzone" id="dropzone" role="button" tabindex="0">
-        <span class="dropzone__plus">+</span>
-        <span class="dropzone__main">拖文件到这里，或点击选择</span>
-        <span class="dropzone__sub">
-          图片自动生成描述 · PDF/Word/Excel/代码自动解析正文 · 视频/音频只存元数据
-        </span>
+      <div id="asset-pick">
+        <div class="dropzone" id="dropzone" role="button" tabindex="0">
+          <span class="dropzone__plus">+</span>
+          <span class="dropzone__main">拖文件到这里，或点击选择</span>
+          <span class="dropzone__sub">
+            图片自动生成描述 · PDF/Word/Excel/代码自动解析正文 · 视频/音频只存元数据
+          </span>
+        </div>
+        <input id="asset-file" type="file" multiple hidden>
+        <ul class="filelist" id="filelist"></ul>
       </div>
-      <input id="asset-file" type="file" multiple hidden>
-      <ul class="filelist" id="filelist"></ul>
 
       <label class="field">
         <span class="field__label" id="asset-title-label">
@@ -230,7 +232,10 @@
     <li class="asset-card">
       <div class="asset-card__head">
         <span class="badge"></span>
-        <button type="button" class="btn btn--ghost asset-card__del">移除</button>
+        <span class="asset-card__actions">
+          <button type="button" class="btn btn--ghost asset-card__edit">编辑</button>
+          <button type="button" class="btn btn--ghost asset-card__del">移除</button>
+        </span>
       </div>
       <h3 class="asset-card__title"></h3>
       <p class="asset-card__excerpt"></p>
@@ -248,6 +253,6 @@
     </div>
   </template>
 
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>

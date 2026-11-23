@@ -142,6 +142,38 @@ def test_asset_crud(client, sample_project, sample_asset):
     assert client.get(f"/assets/{asset_id}").status_code == 404
 
 
+def test_edit_asset_rewrites_fields_and_reindexes(client, sample_project, sample_asset):
+    """编辑素材：标题/正文/标签都要落库，并且重建索引（否则检索还命中旧片段）。"""
+    from backend.app import indexer
+
+    reindexed: list[int] = []
+    original = indexer.index_asset
+    try:
+        indexer.index_asset = lambda db, asset: reindexed.append(asset.id) or 0
+        patched = client.patch(
+            f"/assets/{sample_asset['id']}",
+            json={
+                "title": "金山岭拍摄笔记",
+                "content": "改过的正文：航拍 6 个镜头。",
+                "tags": ["改过", "测试"],
+            },
+        )
+    finally:
+        indexer.index_asset = original
+
+    assert patched.status_code == 200
+    data = body(patched)
+    assert data["title"] == "金山岭拍摄笔记"
+    assert data["content"] == "改过的正文：航拍 6 个镜头。"
+    assert data["tags"] == ["改过", "测试"]
+    # 编辑不能把素材从项目里摘掉
+    assert data["project_ids"] == [sample_project["id"]]
+    assert reindexed == [sample_asset["id"]]
+
+    # 落库要真的生效，不是只回显
+    assert body(client.get(f"/assets/{sample_asset['id']}"))["content"].startswith("改过的正文")
+
+
 def test_link_and_unlink_asset(client, sample_project, sample_asset):
     """素材可以复用到多个项目；摘除只是断开关联，素材本身还在。"""
     other = body(client.post("/projects", json={"title": "2026 合集"}))

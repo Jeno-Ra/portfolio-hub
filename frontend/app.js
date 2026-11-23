@@ -35,6 +35,7 @@ const state = {
   projects: [],
   project: null, // 当前打开的项目（含 assets）
   kind: "all",
+  editing: null, // 正在编辑的素材；null 表示「添加」模式
   files: [],
   cover: null,
   titleAuto: true,
@@ -230,6 +231,10 @@ function assetCard(asset) {
   renderTags(node.querySelector(".asset-card__tags"), asset.tags);
   node.querySelector(".asset-card__date").textContent = fmtDate(asset.created_at);
 
+  node.querySelector(".asset-card__edit").addEventListener("click", () => {
+    openAssetModal(asset);
+  });
+
   node.querySelector(".asset-card__del").addEventListener("click", () => {
     removeAsset(asset).catch((err) => toast(err.message, true));
   });
@@ -421,6 +426,13 @@ function renderFiles() {
     list.append(li);
   });
 
+  if (state.editing) {
+    $("asset-notes-label").textContent = "正文 / 描述";
+    $("asset-notes").placeholder = "这件素材的正文；图片和音频这里就是描述";
+    $("asset-title-label").textContent = "标题";
+    return;
+  }
+
   // 有文件时「标题」可以不填（自动取文件名），「备注」的意义变成给所有文件用
   const hasFiles = state.files.length > 0;
   $("asset-notes-label").textContent = hasFiles
@@ -454,14 +466,24 @@ function addFiles(files) {
   renderFiles();
 }
 
-function openAssetModal() {
+function openAssetModal(asset = null) {
   if (!state.project) return;
+
+  state.editing = asset;
   state.files = [];
   state.titleAuto = true;
-  $("asset-title").value = "";
-  $("asset-notes").value = "";
-  $("asset-tags").value = "";
   $("asset-file").value = "";
+
+  const editing = Boolean(asset);
+  // 编辑时不显示上传区：换文件等于换一件素材，那是新增的语义
+  $("asset-pick").hidden = editing;
+  $("asset-modal-title").textContent = editing ? "编辑素材" : "添加素材";
+  $("btn-asset-save").textContent = editing ? "保存修改" : "保存";
+
+  $("asset-title").value = editing ? asset.title : "";
+  $("asset-notes").value = editing ? asset.content : "";
+  $("asset-tags").value = editing ? (asset.tags || []).join(", ") : "";
+
   renderFiles();
   $("asset-modal").showModal();
   $("asset-title").focus();
@@ -477,6 +499,36 @@ async function submitAsset(event) {
     .map((s) => s.trim())
     .filter(Boolean)
     .join(",");
+
+  const editing = state.editing;
+  if (editing) {
+    if (!title) {
+      toast("标题不能为空", true);
+      return;
+    }
+    const button = $("btn-asset-save");
+    button.disabled = true;
+    try {
+      await api(`/assets/${editing.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          title,
+          content: notes,
+          tags: tags ? tags.split(",") : [],
+        }),
+      });
+      state.editing = null;
+      $("asset-modal").close();
+      toast("已保存修改");
+      await Promise.all([loadProjects(), refreshDetail()]);
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      button.disabled = false;
+      button.textContent = "保存修改";
+    }
+    return;
+  }
 
   if (!state.files.length && !title) {
     toast("没有文件时标题必须填", true);
@@ -576,6 +628,10 @@ function wireWindowDrop() {
     event.preventDefault();
     if (!state.project) {
       toast("先打开一个项目，再拖文件进来", true);
+      return;
+    }
+    if (state.editing) {
+      toast("编辑素材时不能换文件；要加新文件请关掉后点「+ 添加素材」", true);
       return;
     }
     if (!$("asset-modal").open) openAssetModal();
@@ -805,7 +861,8 @@ async function quitApp() {
 function wire() {
   $("btn-new-project").addEventListener("click", () => openProjectModal());
   $("btn-back").addEventListener("click", showList);
-  $("btn-new-asset").addEventListener("click", openAssetModal);
+  // 不能直接传函数引用：click 事件会被当成 asset 参数传进去
+  $("btn-new-asset").addEventListener("click", () => openAssetModal());
   $("btn-edit-project").addEventListener("click", () => {
     if (state.project) openProjectModal(state.project);
   });
@@ -817,7 +874,10 @@ function wire() {
   $("project-form").addEventListener("submit", submitProject);
   $("btn-project-cancel").addEventListener("click", () => $("project-modal").close());
   $("asset-form").addEventListener("submit", submitAsset);
-  $("btn-asset-cancel").addEventListener("click", () => $("asset-modal").close());
+  $("btn-asset-cancel").addEventListener("click", () => {
+    state.editing = null;
+    $("asset-modal").close();
+  });
 
   $("asset-title").addEventListener("input", (event) => {
     // 用户自己改过标题就别再自动覆盖

@@ -407,7 +407,20 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   margin-bottom: 4px;
+}
+
+.asset-card__actions {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.asset-card__actions .btn {
+  padding: 2px 6px;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .badge {
