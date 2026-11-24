@@ -9,12 +9,18 @@ from collections import Counter
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.app import crud, indexer, models, vector_store
 from backend.app.database import get_db
 from backend.app.response import Envelope, ok
 from backend.app.schemas import (
+    AssetGroupBatchMove,
+    AssetGroupMove,
+    GroupCreate,
+    GroupResponse,
+    GroupUpdate,
     LinkAssetsRequest,
     ProjectCreate,
     ProjectDetail,
@@ -52,9 +58,65 @@ def _payload(project: models.Project) -> dict:
     }
 
 
-def _detail(project: models.Project) -> dict:
-    return {**_payload(project), "assets": sorted(project.assets, key=lambda a: a.id)}
+def _detail(project: models.Project, db: Session | None = None) -> dict:
+    assets = sorted(project.assets, key=lambda a: a.id)
+    if db is not None:
+        rows = db.execute(models.project_asset_groups.select().where(models.project_asset_groups.c.project_id == project.id)).all()
+        groups = {r.asset_id: r.group_id for r in rows}
+        payload = []
+        for asset in assets:
+            item = {"id": asset.id, "title": asset.title, "type": asset.type, "content": asset.content, "source_path": asset.source_path, "created_at": asset.created_at, "tags": asset.tags, "projects": asset.projects, "project_group_id": groups.get(asset.id)}
+            payload.append(item)
+        return {**_payload(project), "assets": payload}
+    return {**_payload(project), "assets": assets}
 
+
+@router.get("/projects/{project_id}/groups", response_model=Envelope[list[GroupResponse]])
+def list_groups(project_id: int, db: Session = Depends(get_db)):
+    if crud.get_project(db, project_id) is None: raise HTTPException(status_code=404, detail="项目不存在")
+    return ok(crud.list_groups(db, project_id))
+
+@router.post("/projects/{project_id}/groups", response_model=Envelope[GroupResponse], status_code=201)
+def create_group(project_id: int, data: GroupCreate, db: Session = Depends(get_db)):
+    if crud.get_project(db, project_id) is None: raise HTTPException(status_code=404, detail="项目不存在")
+    try:
+        g = crud.create_group(db, project_id, data)
+    except (IntegrityError, ValueError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if g is None: raise HTTPException(status_code=400, detail="父分组不存在")
+    return ok(g, "已创建")
+
+@router.patch("/projects/{project_id}/groups/{group_id}", response_model=Envelope[GroupResponse])
+def update_group(project_id: int, group_id: int, data: GroupUpdate, db: Session = Depends(get_db)):
+    try: g=crud.update_group(db, project_id, group_id, data)
+    except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if g is None: raise HTTPException(status_code=404, detail="分组不存在")
+    return ok(g, "已更新")
+
+@router.delete("/projects/{project_id}/groups/{group_id}", response_model=Envelope[dict])
+def remove_group(project_id: int, group_id: int, db: Session = Depends(get_db)):
+    try:
+        deleted = crud.delete_group(db, project_id, group_id)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not deleted: raise HTTPException(status_code=404, detail="分组不存在")
+    return ok({"id": group_id}, "已删除")
+
+@router.patch("/projects/{project_id}/assets/group", response_model=Envelope[dict])
+def move_group_batch(project_id: int, data: AssetGroupBatchMove, db: Session = Depends(get_db)):
+    err = crud.move_assets_group(db, project_id, data.asset_ids, data.group_id)
+    if err:
+        raise HTTPException(status_code=404, detail={"project": "项目不存在", "asset": "素材不属于该项目", "group": "分组不存在"}[err])
+    return ok({"project_id": project_id, "asset_ids": data.asset_ids, "group_id": data.group_id}, "已批量移动")
+
+
+@router.patch("/projects/{project_id}/assets/{asset_id}/group", response_model=Envelope[dict])
+def move_group(project_id: int, asset_id: int, data: AssetGroupMove, db: Session = Depends(get_db)):
+    err=crud.move_asset_group(db, project_id, asset_id, data.group_id)
+    if err: raise HTTPException(status_code=404, detail={"project":"项目不存在","asset":"素材不属于该项目","group":"分组不存在"}[err])
+    return ok({"project_id":project_id,"asset_id":asset_id,"group_id":data.group_id}, "已移动")
 
 @router.get("/projects", response_model=Envelope[list[ProjectResponse]])
 def list_projects(skip: int = 0, limit: int = 200, db: Session = Depends(get_db)):
@@ -73,7 +135,7 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
     project = crud.get_project(db, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="项目不存在")
-    return ok(_detail(project))
+    return ok(_detail(project, db))
 
 
 @router.patch("/projects/{project_id}", response_model=Envelope[ProjectResponse])
@@ -136,7 +198,9 @@ def remove_project(
             discard_media(source)  # 连上传副本一起清，别在 media/ 留孤儿文件
             removed_assets += 1
 
+    cover = project.cover_path
     crud.delete_project(db, project_id)
+    discard_media(cover)  # 封面也是我们自己存的副本，删项目时要一起清
     message = f"已删除项目，连同 {removed_assets} 件素材" if removed_assets else "已删除项目"
     return ok({"id": project_id, "removed_assets": removed_assets}, message)
 

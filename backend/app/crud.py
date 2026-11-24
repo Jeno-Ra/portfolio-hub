@@ -51,6 +51,11 @@ def create_asset(db: Session, data: schemas.AssetCreate) -> models.Asset:
     asset.tags = _get_or_create_tags(db, data.tags)
     asset.projects = _resolve_projects(db, data.project_ids)
     db.add(asset)
+    db.flush()
+    if data.group_id is not None:
+        if len(data.project_ids) != 1 or get_group(db, data.project_ids[0], data.group_id) is None:
+            raise ValueError("分组必须属于唯一项目")
+        db.execute(models.project_asset_groups.insert().values(project_id=data.project_ids[0], asset_id=asset.id, group_id=data.group_id))
     db.commit()
     db.refresh(asset)
     return asset
@@ -111,7 +116,11 @@ def update_asset(
         if field == "tags":
             asset.tags = _get_or_create_tags(db, value)
         elif field == "project_ids":
+            old_ids = {p.id for p in asset.projects}
             asset.projects = _resolve_projects(db, value)
+            removed = old_ids - set(value)
+            if removed:
+                db.execute(models.project_asset_groups.delete().where(models.project_asset_groups.c.asset_id == asset_id, models.project_asset_groups.c.project_id.in_(removed)))
         else:
             setattr(asset, field, value)
 
@@ -252,9 +261,113 @@ def unlink_asset(db: Session, project_id: int, asset_id: int) -> bool:
     if target is None:
         return False
     project.assets.remove(target)
+    db.execute(models.project_asset_groups.delete().where(models.project_asset_groups.c.project_id == project_id, models.project_asset_groups.c.asset_id == asset_id))
     db.commit()
     return True
 
+
+# ---------------------------------------------------------------- 素材分组
+
+def list_groups(db: Session, project_id: int):
+    return list(db.scalars(select(models.AssetGroup).where(models.AssetGroup.project_id == project_id).order_by(models.AssetGroup.id)))
+
+def get_group(db: Session, project_id: int, group_id: int):
+    return db.scalar(select(models.AssetGroup).where(models.AssetGroup.project_id == project_id, models.AssetGroup.id == group_id))
+
+def create_group(db: Session, project_id: int, data: schemas.GroupCreate):
+    if data.parent_id is not None and get_group(db, project_id, data.parent_id) is None: return None
+    sibling = db.scalar(select(models.AssetGroup).where(models.AssetGroup.project_id == project_id, models.AssetGroup.parent_id == data.parent_id, models.AssetGroup.name == data.name))
+    if sibling is not None: raise ValueError("同级分组名称已存在")
+    g=models.AssetGroup(project_id=project_id,name=data.name,parent_id=data.parent_id); db.add(g); db.commit(); db.refresh(g); return g
+
+def update_group(db: Session, project_id: int, group_id: int, data: schemas.GroupUpdate):
+    g=get_group(db, project_id, group_id)
+    if g is None: return None
+    if data.parent_id == group_id: raise ValueError("分组不能设为自身子级")
+    if data.parent_id is not None:
+        p=get_group(db, project_id, data.parent_id)
+        if p is None: raise ValueError("父分组不存在")
+        cur=p
+        while cur is not None:
+            if cur.id == group_id: raise ValueError("不能移动到自己的子分组")
+            cur=cur.parent
+    changes = data.model_dump(exclude_unset=True)
+    name = changes.get("name", g.name)
+    parent_id = changes.get("parent_id", g.parent_id)
+    if name is None:
+        raise ValueError("分组名称不能为空")
+    sibling = db.scalar(select(models.AssetGroup).where(
+        models.AssetGroup.project_id == project_id,
+        models.AssetGroup.parent_id == parent_id,
+        models.AssetGroup.name == name,
+        models.AssetGroup.id != group_id,
+    ))
+    if sibling is not None:
+        raise ValueError("同级分组名称已存在")
+    for k, v in changes.items():
+        setattr(g, k, v)
+    db.commit(); db.refresh(g); return g
+
+def delete_group(db: Session, project_id: int, group_id: int):
+    g=get_group(db, project_id, group_id)
+    if g is None: return False
+    # 检查提升后的根分组名称，发生冲突时不得修改任何数据。
+    children = list(g.children)
+    names = [child.name for child in children]
+    if names:
+        conflict = db.scalar(select(models.AssetGroup.name).where(
+            models.AssetGroup.project_id == project_id,
+            models.AssetGroup.parent_id.is_(None),
+            models.AssetGroup.id != group_id,
+            models.AssetGroup.name.in_(names),
+        ))
+        if conflict is not None or len(names) != len(set(names)):
+            raise ValueError(f"子分组提升到根目录时名称冲突：{conflict or '子分组重名'}，请先重命名")
+    # 子分组提升到根，关联素材归根，避免误删内容
+    for c in children: c.parent = None
+    db.flush()
+    db.execute(models.project_asset_groups.update().where(models.project_asset_groups.c.project_id==project_id, models.project_asset_groups.c.group_id==group_id).values(group_id=None))
+    db.delete(g); db.commit(); return True
+
+def move_asset_group(db: Session, project_id: int, asset_id: int, group_id: int|None):
+    if db.scalar(select(models.Project).where(models.Project.id==project_id)) is None: return "project"
+    if db.scalar(select(models.project_assets).where(models.project_assets.c.project_id==project_id, models.project_assets.c.asset_id==asset_id)) is None: return "asset"
+    if group_id is not None and get_group(db, project_id, group_id) is None: return "group"
+    row=db.execute(select(models.project_asset_groups).where(models.project_asset_groups.c.project_id==project_id, models.project_asset_groups.c.asset_id==asset_id)).first()
+    if row: db.execute(models.project_asset_groups.update().where(models.project_asset_groups.c.project_id==project_id, models.project_asset_groups.c.asset_id==asset_id).values(group_id=group_id))
+    else: db.execute(models.project_asset_groups.insert().values(project_id=project_id,asset_id=asset_id,group_id=group_id))
+    db.commit(); return None
+
+
+def move_assets_group(db: Session, project_id: int, asset_ids: list[int], group_id: int | None):
+    """Atomically move multiple project asset associations after validating all inputs."""
+    if db.scalar(select(models.Project).where(models.Project.id == project_id)) is None:
+        return "project"
+    unique_ids = set(asset_ids)
+    found = set(db.scalars(select(models.project_assets.c.asset_id).where(
+        models.project_assets.c.project_id == project_id,
+        models.project_assets.c.asset_id.in_(unique_ids),
+    )))
+    if found != unique_ids:
+        return "asset"
+    if group_id is not None and get_group(db, project_id, group_id) is None:
+        return "group"
+    for asset_id in unique_ids:
+        row = db.execute(select(models.project_asset_groups).where(
+            models.project_asset_groups.c.project_id == project_id,
+            models.project_asset_groups.c.asset_id == asset_id,
+        )).first()
+        if row:
+            db.execute(models.project_asset_groups.update().where(
+                models.project_asset_groups.c.project_id == project_id,
+                models.project_asset_groups.c.asset_id == asset_id,
+            ).values(group_id=group_id))
+        else:
+            db.execute(models.project_asset_groups.insert().values(
+                project_id=project_id, asset_id=asset_id, group_id=group_id,
+            ))
+    db.commit()
+    return None
 
 # ---------------------------------------------------------------- 会话 / 消息
 

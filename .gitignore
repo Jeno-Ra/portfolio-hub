@@ -39,3 +39,6 @@ mobile/android/local.properties
 mobile/android/capacitor-cordova-android-plugins/build/
 *.apk
 *.aab
+
+# 备份产物（数据库 dump + 上传副本，体积大）
+backup/

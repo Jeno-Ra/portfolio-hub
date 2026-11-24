@@ -1,7 +1,7 @@
 from collections.abc import Iterator
 from pathlib import Path
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.config import settings
@@ -51,10 +51,27 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 def init_db() -> None:
     """建表；表已存在则跳过，不会删数据。
 
-    本项目不再靠 ALTER 补列：模型一旦变动（works → projects/assets 那次），
-    就是重建库，历史库没有迁移价值。真要长期演进，应该引入 Alembic。
+    create_all 仅新增缺失表，不修改已有列。分组使用独立表增量升级，
+    并为旧项目素材关联补根目录记录；未来列变更需要显式迁移，禁止重建用户库。
     """
     Base.metadata.create_all(bind=engine)
+    # 增量迁移：为既有项目-素材关联补充分组表根节点记录；不删除旧数据
+    with engine.begin() as conn:
+        if _is_sqlite:
+            conn.execute(text("""
+                INSERT INTO project_asset_groups(project_id, asset_id, group_id)
+                SELECT pa.project_id, pa.asset_id, NULL FROM project_assets pa
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM project_asset_groups pag
+                    WHERE pag.project_id = pa.project_id AND pag.asset_id = pa.asset_id
+                )
+            """))
+        else:
+            conn.execute(text("""
+                INSERT INTO project_asset_groups(project_id, asset_id, group_id)
+                SELECT pa.project_id, pa.asset_id, NULL FROM project_assets pa
+                ON CONFLICT (project_id, asset_id) DO NOTHING
+            """))
 
 
 def get_db() -> Iterator[Session]:

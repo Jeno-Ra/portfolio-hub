@@ -47,6 +47,25 @@ project_tags = Table(
     Column("tag_id", ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
 )
 
+class AssetGroup(Base):
+    __tablename__ = "asset_groups"
+    __table_args__ = (UniqueConstraint("project_id", "parent_id", "name"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("asset_groups.id", ondelete="CASCADE"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    project: Mapped["Project"] = relationship(back_populates="groups")
+    parent: Mapped["AssetGroup | None"] = relationship(remote_side=[id], back_populates="children")
+    children: Mapped[list["AssetGroup"]] = relationship(back_populates="parent")
+
+project_asset_groups = Table(
+    "project_asset_groups", Base.metadata,
+    Column("project_id", ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True),
+    Column("asset_id", ForeignKey("assets.id", ondelete="CASCADE"), primary_key=True),
+    Column("group_id", ForeignKey("asset_groups.id", ondelete="CASCADE"), nullable=True),
+    UniqueConstraint("project_id", "asset_id"),
+)
+
 
 class Project(Base):
     """项目：一个作品的"总集"。标题、简介、封面，下面挂任意多个素材。"""
@@ -67,6 +86,7 @@ class Project(Base):
         back_populates="projects",
         order_by="Asset.id",
     )
+    groups: Mapped[list["AssetGroup"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     tags: Mapped[list["Tag"]] = relationship(
         secondary=project_tags,
         back_populates="projects",

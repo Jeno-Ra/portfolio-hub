@@ -38,7 +38,7 @@ uv run python eval/run_eval.py
 
 ## 换成真实数据
 
-`corpus.json` 现在是合成数据，**跑出的 1.00 只能证明链路和阈值是通的，不能写进简历**。
+`corpus.json` 使用合成数据，仅用于验证检索链路和阈值配置，不代表真实作品库效果。
 换成自己的作品后重跑，那个数字才是真的：
 
 1. 把 `corpus.json` 的 `assets` 换成你的真实素材（title / type / tags / content）

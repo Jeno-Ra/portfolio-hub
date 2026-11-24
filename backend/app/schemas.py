@@ -55,6 +55,7 @@ class AssetCreate(BaseModel):
     project_ids: list[int] = Field(
         default_factory=list, description="要挂到哪些项目下（可多个，素材可复用）"
     )
+    group_id: int | None = Field(default=None, description="所属分组；仅当 project_ids 单项目时生效")
 
     @field_validator("type", mode="before")
     @classmethod
@@ -98,6 +99,7 @@ class AssetResponse(BaseModel):
         default_factory=list,
         validation_alias=AliasChoices("project_ids", "projects"),
     )
+    project_group_id: int | None = None
 
     @field_validator("tags", mode="before")
     @classmethod
@@ -152,6 +154,30 @@ class ProjectDetail(ProjectResponse):
     """项目详情：项目本身 + 它下面的全部素材"""
 
     assets: list[AssetResponse] = Field(default_factory=list)
+
+
+class GroupCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    parent_id: int | None = None
+
+class GroupUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    parent_id: int | None = None
+
+class GroupResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    project_id: int
+    name: str
+    parent_id: int | None = None
+
+class AssetGroupMove(BaseModel):
+    group_id: int | None = None
+
+
+class AssetGroupBatchMove(BaseModel):
+    asset_ids: list[int] = Field(..., min_length=1, description="要移动的素材 id")
+    group_id: int | None = None
 
 
 class LinkAssetsRequest(BaseModel):

@@ -8,13 +8,16 @@
     rel="icon"
     href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f7cff'/%3E%3Ctext x='16' y='23' font-size='18' font-family='sans-serif' text-anchor='middle' fill='white'%3E作%3C/text%3E%3C/svg%3E"
   >
-  <link rel="stylesheet" href="style.css?v=8">
+  <link rel="stylesheet" href="style.css?v=14">
 </head>
 <body>
   <header class="topbar">
     <h1 class="topbar__title">作品集</h1>
     <span class="topbar__hint">项目 / 素材 · AI 作品管理</span>
-    <button id="btn-settings" type="button" class="btn btn--ghost topbar__settings">设置</button>
+    <div class="topbar__actions">
+      <button id="btn-chat" type="button" class="btn btn--ghost" aria-controls="chat-panel" aria-expanded="false">AI 对话</button>
+      <button id="btn-settings" type="button" class="btn btn--ghost">设置</button>
+    </div>
   </header>
 
   <main class="layout">
@@ -55,7 +58,17 @@
           </div>
         </div>
 
-        <p class="detail-count" id="detail-count"></p>
+        <div class="asset-workspace"><nav class="group-nav" id="group-nav" aria-label="素材分组">
+          <div class="group-nav__head"><button id="btn-group-up" type="button" class="btn btn--ghost" hidden>← 返回上级</button><span class="group-sidebar-title">素材分组</span><button id="btn-new-group" type="button" class="btn btn--ghost">+ 新建分组</button></div>
+          <ul class="group-list" id="group-list"></ul>
+        </nav><section class="asset-browser"><h3 id="group-breadcrumb" class="browser-heading">全部素材</h3>
+        <div class="asset-batchbar" id="asset-batchbar" hidden>
+           <label><input id="asset-select-all" type="checkbox"> 全选当前</label>
+           <span id="asset-selected-count">已选 0 件</span>
+           <button id="btn-batch-move" type="button" class="btn btn--primary">移动</button>
+           <button id="btn-batch-clear" type="button" class="btn btn--ghost">取消选择</button>
+         </div>
+         <p class="detail-count" id="detail-count"></p>
 
         <!-- 素材按内置类型筛选；值是 kinds.py 里的类型码 -->
         <nav class="filters" id="kind-filters">
@@ -70,13 +83,15 @@
 
         <ul class="asset-list" id="asset-list"></ul>
         <p class="empty" id="asset-empty">这个项目还没有素材，点「+ 添加素材」拖几个文件进来。</p>
+        </section></div>
       </div>
     </aside>
 
     <!-- ===== 右栏：对话区 ===== -->
-    <section class="panel">
+    <section class="panel chat-panel" id="chat-panel" aria-label="AI 对话" hidden>
       <div class="panel__head">
-        <h2 class="panel__title">对话</h2>
+        <h2 class="panel__title">AI 对话</h2>
+        <button id="btn-chat-close" type="button" class="btn btn--ghost" aria-label="关闭对话">关闭</button>
       </div>
 
       <div class="messages" id="messages"></div>
@@ -140,6 +155,17 @@
         </div>
         <input id="asset-file" type="file" multiple hidden>
         <ul class="filelist" id="filelist"></ul>
+      </div>
+
+      <div id="asset-replace" hidden>
+        <div class="dropzone dropzone--sm" id="dropzone-replace" role="button" tabindex="0">
+          <span class="dropzone__main">替换文件（可选）</span>
+          <span class="dropzone__sub">
+            换了之后正文按新文件重新解析；标题、标签、所属项目都不动
+          </span>
+        </div>
+        <input id="asset-replace-file" type="file" hidden>
+        <ul class="filelist" id="replace-filelist"></ul>
       </div>
 
       <label class="field">
@@ -227,12 +253,21 @@
     </li>
   </template>
 
+  <dialog id="preview-modal" class="modal preview-modal" aria-labelledby="preview-title">
+    <div class="modal__body">
+      <div class="preview-head"><h2 id="preview-title"></h2><button type="button" class="btn btn--ghost" id="preview-close">关闭</button></div>
+      <p id="preview-status" role="status"></p>
+      <div id="preview-content"></div>
+    </div>
+  </dialog>
+
   <!-- ===== 素材卡片模板 ===== -->
   <template id="tpl-asset">
     <li class="asset-card">
       <div class="asset-card__head">
         <span class="badge"></span>
         <span class="asset-card__actions">
+          <button type="button" class="btn btn--ghost asset-card__preview">预览</button>
           <button type="button" class="btn btn--ghost asset-card__edit">编辑</button>
           <button type="button" class="btn btn--ghost asset-card__del">移除</button>
         </span>
@@ -253,6 +288,6 @@
     </div>
   </template>
 
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=15"></script>
 </body>
 </html>

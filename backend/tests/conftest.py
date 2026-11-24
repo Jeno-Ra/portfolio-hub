@@ -12,6 +12,7 @@ from pathlib import Path
 
 # config 是模块级单例（导入时读一次环境变量），所以这几行必须排在任何 backend.app 导入之前
 _TMP = Path(tempfile.mkdtemp(prefix="portfolio-hub-tests-"))
+os.environ["DATABASE_URL"] = ""
 os.environ["DB_PATH"] = str(_TMP / "test.db")
 os.environ["MEDIA_DIR"] = str(_TMP / "media")
 os.environ["CHROMA_DIR"] = str(_TMP / "chroma")
@@ -50,6 +51,8 @@ def offline(monkeypatch):
     shutil.rmtree(MEDIA, ignore_errors=True)
     MEDIA.mkdir(parents=True, exist_ok=True)
 
+    assert engine.url.get_backend_name() == "sqlite"
+    assert Path(str(engine.url.database)).resolve().is_relative_to(_TMP.resolve())
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
 

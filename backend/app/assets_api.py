@@ -10,6 +10,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from backend.app import crud, indexer, kinds, models, vector_store, vision
@@ -22,6 +23,7 @@ from backend.app.uploads import (
     check_image,
     check_suffix,
     discard_media,
+    is_media_file,
     safe_name,
     save_upload,
 )
@@ -80,6 +82,7 @@ def _store_asset(
     tags: list[str],
     source: Path,
     project_ids: list[int],
+    group_id: int | None = None,
 ) -> models.Asset:
     created = crud.create_asset(
         db,
@@ -89,6 +92,7 @@ def _store_asset(
             content=content,
             tags=tags,
             project_ids=project_ids,
+            group_id=group_id,
         ),
     )
     created.source_path = str(source)
@@ -103,7 +107,10 @@ def create_asset(asset: AssetCreate, db: Session = Depends(get_db)):
     for project_id in asset.project_ids:
         if crud.get_project(db, project_id) is None:
             raise HTTPException(status_code=404, detail="项目不存在")
-    created = crud.create_asset(db, asset)
+    try:
+        created = crud.create_asset(db, asset)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     # 入库后立刻建索引：否则新素材搜不到（之前就是这个坑）
     indexer.index_quietly(db, created)
     return ok(created, "已创建")
@@ -117,6 +124,7 @@ def upload_asset(
     tags: str = Form(""),
     notes: str = Form(""),
     project_id: int | None = Form(None),
+    group_id: int | None = Form(None),
     db: Session = Depends(get_db),
 ):
     """浏览器 / 手机上传录入：文件先落盘到 media/，再按扩展名判定类型并解析。
@@ -130,9 +138,13 @@ def upload_asset(
     - 落盘后看图片魔数，防止 `.png` 其实是改名的视频（视觉模型那边只会报解码失败）。
     """
     original = safe_name(file.filename or "")
-    if project_id is not None and crud.get_project(db, project_id) is None:
-        # 静默丢掉的 project_id 会让用户以为素材挂上了，其实没挂
-        raise HTTPException(status_code=404, detail="项目不存在")
+    if project_id is not None:
+        if crud.get_project(db, project_id) is None:
+            raise HTTPException(status_code=404, detail="项目不存在")
+        if group_id is not None and crud.get_group(db, project_id, group_id) is None:
+            raise HTTPException(status_code=400, detail="分组不存在或不属于该项目")
+    elif group_id is not None:
+        raise HTTPException(status_code=400, detail="指定分组时必须同时指定项目")
     try:
         suffix = check_suffix(original)
     except ValueError as exc:
@@ -183,9 +195,61 @@ def upload_asset(
             tags=_split_tags(tags),
             source=saved,
             project_ids=[project_id] if project_id else [],
+            group_id=group_id,
         ),
         "已上传",
     )
+
+
+@router.post("/assets/{asset_id}/file", response_model=Envelope[AssetResponse])
+def replace_asset_file(
+    asset_id: int,
+    file: UploadFile = File(...),
+    notes: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    """替换素材的源文件：类型按新扩展名重判、正文重新解析、索引重建、旧副本删掉。
+
+    真实素材经常要改好几版（片子重新剪、文稿改两遍），所以这是"同一件素材换文件"，
+    不是"再建一件"——标题、标签、所属项目都保持不动。
+    """
+    asset = crud.get_asset(db, asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="素材不存在")
+
+    original = safe_name(file.filename or "")
+    try:
+        suffix = check_suffix(original)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        saved = save_upload(file)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        if suffix in IMAGE_SUFFIXES:
+            check_image(original, saved)
+        kind = kinds.of(saved)
+        content = _content_for(kind, saved, notes, None)
+    except (HTTPException, ValueError) as exc:
+        # 新文件没解析成功就当作没换过：把刚写的副本删掉，旧的继续用
+        saved.unlink(missing_ok=True)
+        if isinstance(exc, ValueError):
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise
+
+    old_source = asset.source_path
+    asset.type = kind
+    asset.content = content
+    asset.source_path = str(saved)
+    db.commit()
+    db.refresh(asset)
+    indexer.index_quietly(db, asset)
+    # 只删我们自己存的那份旧副本，用户磁盘上的原文件永远不碰
+    discard_media(old_source)
+    return ok(asset, "已替换文件")
 
 
 @router.post("/assets/ingest", response_model=Envelope[AssetResponse], status_code=201)
@@ -205,6 +269,7 @@ def ingest_asset(payload: IngestRequest, db: Session = Depends(get_db)):
             tags=payload.tags,
             source=path,
             project_ids=payload.project_ids,
+            group_id=None,
         ),
         "已录入",
     )
@@ -228,6 +293,35 @@ def get_asset(asset_id: int, db: Session = Depends(get_db)):
     if asset is None:
         raise HTTPException(status_code=404, detail="素材不存在")
     return ok(asset)
+
+
+@router.get("/assets/{asset_id}/preview")
+@router.head("/assets/{asset_id}/preview")
+def preview_asset(asset_id: int, db: Session = Depends(get_db)):
+    """只提供本应用媒体目录中的副本；绝不根据客户端输入的路径读取文件。"""
+    asset = crud.get_asset(db, asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="素材不存在")
+    if not asset.source_path:
+        raise HTTPException(status_code=404, detail="该素材没有原文件")
+    path = Path(asset.source_path)
+    if not is_media_file(path) or not path.is_file():
+        raise HTTPException(status_code=404, detail="素材文件不可用或不在上传目录中")
+    # 仅允许安全媒体和 PDF 内联；其他文件作为文本或附件处理，避免网页脚本执行。
+    suffix = path.suffix.lower()
+    media = {
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+        ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
+        ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
+        ".opus": "audio/ogg", ".m4a": "audio/mp4", ".flac": "audio/flac",
+        ".pdf": "application/pdf",
+    }
+    return FileResponse(
+        path, media_type=media.get(suffix, "text/plain; charset=utf-8"),
+        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store",
+                 "Content-Security-Policy": "default-src 'none'; sandbox"},
+    )
 
 
 @router.patch("/assets/{asset_id}", response_model=Envelope[AssetResponse])

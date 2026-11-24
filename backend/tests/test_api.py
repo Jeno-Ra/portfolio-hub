@@ -16,6 +16,7 @@ import base64
 import re
 from pathlib import Path
 
+from backend.app import uploads
 from backend.tests.conftest import body
 from backend.tests.fakes import CALLS, DESCRIPTION, FAKE_HITS, hit
 
@@ -172,6 +173,68 @@ def test_edit_asset_rewrites_fields_and_reindexes(client, sample_project, sample
 
     # 落库要真的生效，不是只回显
     assert body(client.get(f"/assets/{sample_asset['id']}"))["content"].startswith("改过的正文")
+
+
+def test_delete_project_removes_cover_copy(client):
+    """封面也是上传副本，删项目时必须一起清掉，不能在 media/ 留孤儿。"""
+    project = body(client.post("/projects", json={"title": "带封面的项目"}))
+    cover = body(
+        client.post(
+            f"/projects/{project['id']}/cover",
+            files={"file": ("封面.png", PNG, "image/png")},
+        )
+    )
+    assert cover["cover_url"]
+    cover_file = uploads.MEDIA_DIR / Path(cover["cover_url"]).name
+    assert cover_file.exists()
+
+    assert client.delete(f"/projects/{project['id']}").status_code == 200
+    assert not cover_file.exists()
+
+
+def test_replace_asset_file_reparses_and_cleans_old_copy(client, sample_project):
+    """同一件素材换文件：标题/标签/项目不动，正文按新文件重解析，旧副本删掉。"""
+    created = body(
+        client.post(
+            "/assets/upload",
+            files={"file": ("初稿.md", "# 初稿\n\n金山岭 19 个镜头。".encode(), "text/markdown")},
+            data={"project_id": str(sample_project["id"]), "title": "拍摄笔记", "tags": "剪辑"},
+        )
+    )
+    old_path = Path(created["source_path"])
+    assert old_path.exists()
+
+    replaced = client.post(
+        f"/assets/{created['id']}/file",
+        files={"file": ("定稿.txt", "定稿正文：航拍 6 个镜头。".encode(), "text/plain")},
+    )
+    assert replaced.status_code == 200
+    data = body(replaced)
+    assert data["id"] == created["id"]
+    assert data["title"] == "拍摄笔记"  # 换文件不改标题
+    assert data["tags"] == ["剪辑"]
+    assert data["project_ids"] == [sample_project["id"]]  # 也不会被摘出项目
+    assert data["type"] == "text"
+    assert data["content"].startswith("定稿正文")
+    assert not old_path.exists()  # 旧副本必须清掉，否则 media/ 攒垃圾
+
+    # 换文件时的备注会拼在正文最前面
+    with_notes = body(
+        client.post(
+            f"/assets/{created['id']}/file",
+            files={"file": ("第二版.txt", "第二版正文。".encode(), "text/plain")},
+            data={"notes": "第二版说明"},
+        )
+    )
+    assert with_notes["content"].startswith("第二版说明")
+
+    # 不支持的扩展名：400，而且旧内容不能被破坏
+    bad = client.post(
+        f"/assets/{created['id']}/file",
+        files={"file": ("virus.exe", b"MZ", "application/octet-stream")},
+    )
+    assert bad.status_code == 400
+    assert body(client.get(f"/assets/{created['id']}"))["content"].startswith("第二版说明")
 
 
 def test_link_and_unlink_asset(client, sample_project, sample_asset):

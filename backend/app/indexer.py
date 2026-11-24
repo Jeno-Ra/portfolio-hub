@@ -32,15 +32,20 @@ def index_asset(db: Session, asset: models.Asset) -> int:
     先删后建：素材内容改了以后旧片段必须清掉，
     否则检索会召回已经不存在的内容（很难察觉的那种 bug）。
     """
+    # 先完成切片和向量化，再触碰旧索引。这样密钥缺失、网络错误或
+    # 维度不匹配时，旧索引仍可用，不会出现“素材存在但完全搜不到”。
+    chunks = split_text(asset.content or "")
+    if not chunks:
+        vector_store.delete_asset(asset.id)
+        db.execute(delete(models.Chunk).where(models.Chunk.asset_id == asset.id))
+        db.commit()
+        return 0
+
+    vectors = embed_texts(chunks)
     vector_store.delete_asset(asset.id)
     db.execute(delete(models.Chunk).where(models.Chunk.asset_id == asset.id))
     db.commit()
 
-    chunks = split_text(asset.content or "")
-    if not chunks:
-        return 0
-
-    vectors = embed_texts(chunks)
     vector_store.upsert_chunks(
         asset.id,
         chunks,
