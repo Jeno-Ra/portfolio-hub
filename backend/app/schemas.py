@@ -91,6 +91,7 @@ class AssetResponse(BaseModel):
     type: str = ""
     content: str = ""
     source_path: str | None = None
+    content_hash: str | None = None
     created_at: UtcDatetime
     tags: list[str] = Field(default_factory=list)
     # ORM 上的属性叫 projects（对象列表），客户端传进来叫 project_ids（id 列表），

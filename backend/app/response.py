@@ -35,6 +35,7 @@ OK = 0
 # 名字 -> (业务码, HTTP 状态)。业务码按段分：1xxx 调用方问题 / 2xxx 上游 / 3xxx 自己
 ERRORS: dict[str, tuple[int, int]] = {
     "bad_request": (1001, 400),
+    "duplicate_asset": (4090, 409),
     "not_configured": (1002, 400),
     "not_found": (1003, 404),
     "validation": (1005, 422),
@@ -91,6 +92,16 @@ def install(app: FastAPI) -> None:
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException):
+        if exc.status_code == 409:
+            detail = exc.detail
+            message = "发现内容完全相同的素材，请选择复用、仍然新建或取消"
+            if not isinstance(detail, dict):
+                message = str(detail)
+                detail = None
+            return JSONResponse(
+                status_code=409,
+                content={"code": 4090, "message": message, "data": detail},
+            )
         name = {
             400: "bad_request",
             404: "not_found",

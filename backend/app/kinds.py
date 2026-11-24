@@ -51,7 +51,12 @@ def label(kind: str) -> str:
 
 
 def of(path: Path) -> str:
-    """按扩展名判定内置类型。解析方式也按它走，不看用户填了什么。"""
+    """按扩展名判定内置类型。
+
+    这是“类型”和“标签”的区别：标签只是搜索/筛选元数据；
+    类型会决定后续正文怎么生成，例如 image 走视觉模型、document 走解析器。
+    传进来的路径可能已经是上传后的随机文件名，但后缀仍保留，所以判断仍可靠。
+    """
     suffix = path.suffix.lower()
     if suffix in IMAGE_SUFFIXES:
         return IMAGE

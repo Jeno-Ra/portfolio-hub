@@ -10,6 +10,7 @@
     - 边读边写，超过上限立刻中止并删掉半截文件，不把整个文件读进内存
 """
 
+import hashlib
 import re
 import uuid
 from pathlib import Path
@@ -111,6 +112,77 @@ def save_upload(upload: UploadFile) -> Path:
         raise ValueError("文件是空的")
 
     return target
+
+
+def sha256_file(path: Path) -> str:
+    """按块计算内容哈希，不把大视频一次性读进内存。"""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(CHUNK):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def stage_upload(upload: UploadFile, token: str) -> Path:
+    """把重复检测待确认的上传暂存到独立目录，避免它被当作正式媒体副本。"""
+    stage_dir = MEDIA_DIR.parent / ".portfolio-pending"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    target = stage_dir / f"{token}_{safe_name(upload.filename or '')}"
+    total = 0
+    try:
+        with target.open("xb") as out:
+            while True:
+                chunk = upload.file.read(CHUNK)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_BYTES:
+                    raise ValueError(
+                        f"文件超过 {MAX_BYTES // (1024 * 1024)} MB 上限，请先压缩或裁剪"
+                    )
+                out.write(chunk)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    if total == 0:
+        target.unlink(missing_ok=True)
+        raise ValueError("文件是空的")
+    return target
+
+
+def staged_path(token: str) -> Path:
+    """只允许用 UUID token 在 pending 目录内定位暂存文件。"""
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise ValueError("上传确认凭据无效")
+    directory = (MEDIA_DIR.parent / ".portfolio-pending").resolve()
+    matches = list(directory.glob(f"{token}_*"))
+    if len(matches) != 1 or not matches[0].resolve().is_relative_to(directory):
+        raise FileNotFoundError("待确认的上传不存在或已过期")
+    return matches[0]
+
+
+def discard_staged(token: str) -> None:
+    """删除指定 token 的暂存文件。"""
+    try:
+        staged_path(token).unlink(missing_ok=True)
+    except (ValueError, FileNotFoundError):
+        pass
+
+
+def cleanup_staged(max_age_seconds: int = 3600) -> None:
+    """清理用户关闭页面后遗留的暂存上传，避免 .pending 长期占用媒体卷。"""
+    import time
+
+    stage_dir = MEDIA_DIR.parent / ".portfolio-pending"
+    if not stage_dir.exists():
+        return
+    cutoff = time.time() - max_age_seconds
+    for path in stage_dir.iterdir():
+        try:
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink(missing_ok=True)
+        except OSError:
+            continue
 
 
 def is_media_file(path: Path) -> bool:

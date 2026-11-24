@@ -8,7 +8,7 @@
     rel="icon"
     href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f7cff'/%3E%3Ctext x='16' y='23' font-size='18' font-family='sans-serif' text-anchor='middle' fill='white'%3E作%3C/text%3E%3C/svg%3E"
   >
-  <link rel="stylesheet" href="style.css?v=14">
+  <link rel="stylesheet" href="style.css?v=16">
 </head>
 <body>
   <header class="topbar">
@@ -253,6 +253,19 @@
     </li>
   </template>
 
+  <dialog id="duplicate-modal" class="modal" aria-labelledby="duplicate-title">
+    <div class="modal__body">
+      <h2 class="modal__title" id="duplicate-title">发现相同文件</h2>
+      <p class="modal__note">请选择如何处理。复用不会复制文件，也不会修改已有素材。</p>
+      <div id="duplicate-candidates" class="duplicate-candidates"></div>
+      <div class="modal__actions">
+        <button type="button" class="btn" id="duplicate-cancel">取消</button>
+        <button type="button" class="btn" id="duplicate-new">仍然新建</button>
+        <button type="button" class="btn btn--primary" id="duplicate-reuse">复用所选素材</button>
+      </div>
+    </div>
+  </dialog>
+
   <dialog id="preview-modal" class="modal preview-modal" aria-labelledby="preview-title">
     <div class="modal__body">
       <div class="preview-head"><h2 id="preview-title"></h2><button type="button" class="btn btn--ghost" id="preview-close">关闭</button></div>
@@ -272,6 +285,7 @@
           <button type="button" class="btn btn--ghost asset-card__del">移除</button>
         </span>
       </div>
+      <div class="asset-card__inline-preview"></div>
       <h3 class="asset-card__title"></h3>
       <p class="asset-card__excerpt"></p>
       <div class="asset-card__foot">
@@ -288,6 +302,6 @@
     </div>
   </template>
 
-  <script src="app.js?v=15"></script>
+  <script src="app.js?v=17"></script>
 </body>
 </html>

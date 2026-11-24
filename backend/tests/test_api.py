@@ -192,6 +192,133 @@ def test_delete_project_removes_cover_copy(client):
     assert not cover_file.exists()
 
 
+def test_duplicate_upload_offers_reuse_new_or_cancel(client, sample_project):
+    """重复内容先询问；复用只挂关联，新建才多一份媒体，取消不写业务数据。"""
+    content = b"duplicate body for sha256 test"
+    first = client.post(
+        "/assets/upload",
+        files={"file": ("first.txt", content, "text/plain")},
+        data={"project_id": str(sample_project["id"]), "title": "原素材"},
+    )
+    assert first.status_code == 201
+    first_data = body(first)
+    first_path = Path(first_data["source_path"])
+    assert len(first_data["content_hash"]) == 64
+
+    other = body(client.post("/projects", json={"title": "复用目标项目"}))
+    duplicate = client.post(
+        "/assets/upload",
+        files={"file": ("copy.txt", content, "text/plain")},
+        data={"project_id": str(other["id"]), "group_id": ""},
+    )
+    assert duplicate.status_code == 409
+    conflict = duplicate.json()["data"]
+    assert conflict["kind"] == "duplicate_asset"
+    assert conflict["candidates"][0]["asset_id"] == first_data["id"]
+    assert len(body(client.get("/assets"))) == 1
+    assert len([p for p in uploads.MEDIA_DIR.iterdir() if p.is_file()]) == 1
+
+    reused = client.post(
+        "/assets/upload/confirm",
+        json={
+            "temp_id": conflict["temp_id"],
+            "action": "reuse_existing",
+            "existing_asset_id": first_data["id"],
+            "project_id": other["id"],
+            "group_id": None,
+        },
+    )
+    assert reused.status_code == 200
+    assert body(reused)["id"] == first_data["id"]
+    assert body(client.get(f"/projects/{other['id']}"))["assets"][0]["id"] == first_data["id"]
+    assert len(body(client.get("/assets"))) == 1
+    assert list(uploads.MEDIA_DIR.glob("*")) == [first_path]
+
+    # 同一文件再上传，用户明确选择“仍然新建”，才会产生独立 Asset 和媒体副本。
+    second_conflict = client.post(
+        "/assets/upload",
+        files={"file": ("copy.txt", content, "text/plain")},
+        data={"project_id": str(other["id"])},
+    ).json()["data"]
+    created = client.post(
+        "/assets/upload/confirm",
+        json={"temp_id": second_conflict["temp_id"], "action": "create_new", "project_id": other["id"]},
+    )
+    assert created.status_code == 200
+    assert body(created)["id"] != first_data["id"]
+    assert body(created)["content_hash"] == first_data["content_hash"]
+    assert len(body(client.get("/assets"))) == 2
+    assert len(list(uploads.MEDIA_DIR.glob("*"))) == 2
+
+    third_conflict = client.post(
+        "/assets/upload",
+        files={"file": ("copy.txt", content, "text/plain")},
+        data={"project_id": str(other["id"])},
+    ).json()["data"]
+    canceled = client.post(
+        "/assets/upload/confirm",
+        json={"temp_id": third_conflict["temp_id"], "action": "cancel"},
+    )
+    assert canceled.status_code == 200
+    assert len(body(client.get("/assets"))) == 2
+    assert len(list(uploads.MEDIA_DIR.glob("*"))) == 2
+
+
+def test_duplicate_upload_rejects_invalid_or_reused_token(client):
+    """确认凭据必须有效且一次性，不能通过猜 ID 复用他人暂存文件。"""
+    invalid = client.post(
+        "/assets/upload/confirm",
+        json={"temp_id": "../database", "action": "cancel"},
+    )
+    assert invalid.status_code == 404
+
+    token = "a" * 32
+    staged = uploads.stage_upload(
+        type("Upload", (), {"filename": "x.txt", "file": __import__("io").BytesIO(b"temp")})(),
+        token,
+    )
+    assert staged.exists()
+    canceled = client.post(
+        "/assets/upload/confirm",
+        json={"temp_id": token, "action": "cancel"},
+    )
+    assert canceled.status_code == 200
+    assert not staged.exists()
+    again = client.post(
+        "/assets/upload/confirm",
+        json={"temp_id": token, "action": "cancel"},
+    )
+    assert again.status_code == 404
+    assert body(client.get("/assets")) == []
+
+
+def test_duplicate_upload_rejects_candidate_from_different_content(client, sample_project):
+    """确认时重新核对哈希，避免候选被替换或过期后误复用。"""
+    first = body(client.post(
+        "/assets/upload",
+        files={"file": ("first.txt", b"original duplicate", "text/plain")},
+        data={"project_id": str(sample_project["id"])},
+    ))
+    conflict = client.post(
+        "/assets/upload",
+        files={"file": ("copy.txt", b"original duplicate", "text/plain")},
+    ).json()["data"]
+    from backend.app import models
+    from backend.app.database import SessionLocal
+
+    with SessionLocal() as db:
+        asset = db.get(models.Asset, first["id"])
+        asset.content_hash = "0" * 64
+        db.commit()
+    response = client.post(
+        "/assets/upload/confirm",
+        json={"temp_id": conflict["temp_id"], "action": "reuse_existing", "existing_asset_id": first["id"]},
+    )
+    assert response.status_code == 409, response.json()
+    assert body(client.get("/assets")) == [first | {"content_hash": "0" * 64}]
+    assert len(list(uploads.MEDIA_DIR.glob("*"))) == 1
+
+
 def test_replace_asset_file_reparses_and_cleans_old_copy(client, sample_project):
     """同一件素材换文件：标题/标签/项目不动，正文按新文件重解析，旧副本删掉。"""
     created = body(

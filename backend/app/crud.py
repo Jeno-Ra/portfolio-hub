@@ -91,6 +91,25 @@ def list_assets(
     return list(db.scalars(stmt.offset(skip).limit(limit)))
 
 
+def assets_missing_hash(db: Session) -> list[models.Asset]:
+    """返回历史素材中有源文件但尚未计算哈希的记录，用于惰性迁移。"""
+    stmt = _asset_query().where(
+        models.Asset.content_hash.is_(None), models.Asset.source_path.is_not(None)
+    )
+    return list(db.scalars(stmt))
+
+
+def find_assets_by_hash(db: Session, content_hash: str) -> list[models.Asset]:
+    """查找完全相同的上传素材，预加载项目以便用户选择要复用哪一条。"""
+    stmt = (
+        select(models.Asset)
+        .options(selectinload(models.Asset.tags), selectinload(models.Asset.projects))
+        .where(models.Asset.content_hash == content_hash)
+        .order_by(models.Asset.id)
+    )
+    return list(db.scalars(stmt))
+
+
 def get_asset(db: Session, asset_id: int) -> models.Asset | None:
     return db.get(
         models.Asset,

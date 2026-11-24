@@ -4,6 +4,10 @@
    结构约定见 index.html 里的 <template>
    ============================================================ */
 
+.duplicate-candidates { display: grid; gap: 8px; max-height: 42vh; overflow: auto; margin: 16px 0; }
+.duplicate-candidate { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.duplicate-candidate:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.duplicate-candidate input { accent-color: var(--accent); }
 .preview-modal { width: min(92vw, 980px); max-width: 980px; }
 .preview-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 #preview-content { max-height: 70vh; overflow: auto; }
@@ -466,6 +470,11 @@ body {
 .badge[data-kind="text"] { background: var(--kind-text); }
 .badge[data-kind="code"] { background: var(--kind-code); }
 .badge[data-kind="document"] { background: var(--kind-document); }
+
+.asset-card__inline-preview { min-height: 0; margin: 8px 0; border-radius: 10px; overflow: hidden; background: var(--panel-2); }
+.asset-card__inline-preview:empty { display: none; }
+.asset-card__inline-preview img, .asset-card__inline-preview video { display: block; width: 100%; max-height: 180px; object-fit: cover; cursor: zoom-in; }
+.asset-card__inline-preview video { cursor: default; }
 
 .asset-card__title {
   margin: 0;

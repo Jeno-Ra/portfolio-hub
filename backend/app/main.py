@@ -120,7 +120,11 @@ app.include_router(settings_api.router)
 # 上传的副本要能直接访问：项目封面、以后的素材预览都靠它。
 # 只暴露 media/ 这一层，用户原始文件不在这个目录里，所以不会被顺带暴露出去。
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
+app.mount(
+    "/media",
+    StaticFiles(directory=str(MEDIA_DIR), check_dir=True),
+    name="media",
+)
 
 
 # 前端静态托管。必须放在所有 API 路由之后：

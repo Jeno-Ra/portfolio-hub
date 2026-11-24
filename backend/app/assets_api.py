@@ -8,6 +8,7 @@
 """
 
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -15,17 +16,28 @@ from sqlalchemy.orm import Session
 
 from backend.app import crud, indexer, kinds, models, vector_store, vision
 from backend.app.database import get_db
+from backend.app.dedupe_schemas import (
+    DuplicateCandidate,
+    DuplicateConfirm,
+    DuplicateConflict,
+)
 from backend.app.files import extract_text
 from backend.app.response import Envelope, ok
 from backend.app.schemas import AssetCreate, AssetResponse, AssetUpdate, IngestRequest
 from backend.app.uploads import (
     IMAGE_SUFFIXES,
+    MEDIA_DIR,
     check_image,
     check_suffix,
+    cleanup_staged,
     discard_media,
+    discard_staged,
     is_media_file,
     safe_name,
     save_upload,
+    sha256_file,
+    stage_upload,
+    staged_path,
 )
 
 router = APIRouter()
@@ -83,6 +95,7 @@ def _store_asset(
     source: Path,
     project_ids: list[int],
     group_id: int | None = None,
+    content_hash: str | None = None,
 ) -> models.Asset:
     created = crud.create_asset(
         db,
@@ -96,6 +109,7 @@ def _store_asset(
         ),
     )
     created.source_path = str(source)
+    created.content_hash = content_hash
     db.commit()
     db.refresh(created)
     indexer.index_quietly(db, created)
@@ -137,6 +151,7 @@ def upload_asset(
     - 落盘前看扩展名（白名单），不合规的文件根本不会写进磁盘；
     - 落盘后看图片魔数，防止 `.png` 其实是改名的视频（视觉模型那边只会报解码失败）。
     """
+    cleanup_staged()
     original = safe_name(file.filename or "")
     if project_id is not None:
         if crud.get_project(db, project_id) is None:
@@ -150,19 +165,56 @@ def upload_asset(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    token = uuid4().hex
     try:
-        saved = save_upload(file)
+        staged = stage_upload(file, token)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
         if suffix in IMAGE_SUFFIXES:
-            check_image(original, saved)
+            check_image(original, staged)
     except ValueError as exc:
-        # 落盘了才发现内容不对：这半份副本必须删掉，否则 media/ 会攒垃圾
-        saved.unlink(missing_ok=True)
+        discard_staged(token)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    content_hash = sha256_file(staged)
+    # 兼容升级前创建的上传副本：只按数据库已有 source_path 检查 MEDIA_DIR，
+    # 不遍历或扫描用户电脑上的其他目录。
+    legacy_assets = crud.assets_missing_hash(db)
+    for legacy in legacy_assets:
+        if legacy.content_hash or not legacy.source_path:
+            continue
+        legacy_path = Path(legacy.source_path)
+        if is_media_file(legacy_path) and legacy_path.is_file():
+            legacy.content_hash = sha256_file(legacy_path)
+    db.commit()
+    matches = crud.find_assets_by_hash(db, content_hash)
+    if matches and cover is not None and cover.filename:
+        discard_staged(token)
+        raise HTTPException(
+            status_code=400,
+            detail="发现重复素材时请先完成素材操作，再单独上传项目封面",
+        )
+    if matches:
+        conflict = DuplicateConflict(
+            message="检测到完全相同的文件",
+            temp_id=token,
+            candidates=[
+                DuplicateCandidate(
+                    asset_id=item.id,
+                    title=item.title,
+                    type=item.type,
+                    projects=[{"id": p.id, "title": p.title} for p in item.projects],
+                    content_hash=content_hash,
+                )
+                for item in matches
+            ],
+        )
+        raise HTTPException(status_code=409, detail=conflict.model_dump())
+
+    saved = MEDIA_DIR / f"{uuid4().hex[:8]}_{original}"
+    staged.replace(saved)
     saved_cover: Path | None = None
     try:
         if cover is not None and cover.filename:
@@ -196,9 +248,105 @@ def upload_asset(
             source=saved,
             project_ids=[project_id] if project_id else [],
             group_id=group_id,
+            content_hash=content_hash,
         ),
         "已上传",
     )
+
+
+@router.post("/assets/upload/confirm", response_model=Envelope[AssetResponse | None])
+def confirm_duplicate_upload(payload: DuplicateConfirm, db: Session = Depends(get_db)):
+    """完成重复上传后的用户选择；复用只建立关系，新建才保存另一份媒体副本。"""
+    try:
+        staged = staged_path(payload.temp_id)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    try:
+        content_hash = sha256_file(staged)
+        if payload.action == "cancel":
+            discard_staged(payload.temp_id)
+            return ok(None, "已取消")
+
+        if payload.action not in {"reuse_existing", "create_new"}:
+            discard_staged(payload.temp_id)
+            raise HTTPException(status_code=400, detail="未知的重复素材处理方式")
+        if payload.project_id is not None and crud.get_project(db, payload.project_id) is None:
+            discard_staged(payload.temp_id)
+            raise HTTPException(status_code=404, detail="项目不存在")
+        if payload.group_id is not None and (
+            payload.project_id is None
+            or crud.get_group(db, payload.project_id, payload.group_id) is None
+        ):
+            discard_staged(payload.temp_id)
+            raise HTTPException(status_code=400, detail="分组不存在或不属于该项目")
+
+        if payload.action == "reuse_existing":
+            if payload.existing_asset_id is None:
+                discard_staged(payload.temp_id)
+                raise HTTPException(status_code=400, detail="请选择要复用的素材")
+            asset = crud.get_asset(db, payload.existing_asset_id)
+            if asset is None or asset.content_hash != content_hash:
+                discard_staged(payload.temp_id)
+                raise HTTPException(status_code=409, detail="该候选已不存在或文件内容已变化，请重新上传")
+            if payload.project_id is not None:
+                project = crud.get_project(db, payload.project_id)
+                if project is None:
+                    raise HTTPException(status_code=404, detail="项目不存在")
+                if payload.group_id is not None and crud.get_group(db, payload.project_id, payload.group_id) is None:
+                    raise HTTPException(status_code=400, detail="分组不存在或不属于该项目")
+                crud.link_assets(db, payload.project_id, [asset.id])
+                if db.execute(models.project_asset_groups.select().where(
+                    models.project_asset_groups.c.project_id == payload.project_id,
+                    models.project_asset_groups.c.asset_id == asset.id,
+                )).first():
+                    db.execute(models.project_asset_groups.update().where(
+                        models.project_asset_groups.c.project_id == payload.project_id,
+                        models.project_asset_groups.c.asset_id == asset.id,
+                    ).values(group_id=payload.group_id))
+                else:
+                    db.execute(models.project_asset_groups.insert().values(
+                        project_id=payload.project_id, asset_id=asset.id, group_id=payload.group_id
+                    ))
+                db.commit()
+            discard_staged(payload.temp_id)
+            return ok(crud.get_asset(db, asset.id), "已复用已有素材")
+
+        original_name = staged.name.split("_", 1)[1]
+        try:
+            suffix = check_suffix(original_name)
+            if suffix in IMAGE_SUFFIXES:
+                check_image(original_name, staged)
+            kind = kinds.of(staged)
+            content = _content_for(kind, staged, payload.notes)
+        except (ValueError, HTTPException) as exc:
+            discard_staged(payload.temp_id)
+            if isinstance(exc, ValueError):
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise
+        saved = MEDIA_DIR / f"{uuid4().hex[:8]}_{original_name}"
+        staged.replace(saved)
+        try:
+            created = _store_asset(
+                db,
+                title=payload.title.strip() or Path(original_name).stem,
+                kind=kind,
+                content=content,
+                tags=payload.tags,
+                source=saved,
+                project_ids=[payload.project_id] if payload.project_id else [],
+                group_id=payload.group_id,
+                content_hash=content_hash,
+            )
+        except Exception:
+            saved.unlink(missing_ok=True)
+            raise
+        return ok(created, "已创建独立素材")
+    except HTTPException:
+        raise
+    except Exception:
+        discard_staged(payload.temp_id)
+        raise
 
 
 @router.post("/assets/{asset_id}/file", response_model=Envelope[AssetResponse])
@@ -244,6 +392,7 @@ def replace_asset_file(
     asset.type = kind
     asset.content = content
     asset.source_path = str(saved)
+    asset.content_hash = sha256_file(saved)
     db.commit()
     db.refresh(asset)
     indexer.index_quietly(db, asset)

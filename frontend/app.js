@@ -85,7 +85,11 @@ async function api(path, options = {}) {
     throw new Error(`服务没有返回数据（HTTP ${res.status}），可能没起来`);
   }
   if (payload.code !== 0) {
-    throw new Error(payload.message || `请求失败（HTTP ${res.status}）`);
+    const error = new Error(payload.message || `请求失败（HTTP ${res.status}）`);
+    error.status = res.status;
+    error.code = payload.code;
+    error.data = payload.data;
+    throw error;
   }
   return payload.data;
 }
@@ -297,6 +301,21 @@ function assetCard(asset) {
   badge.textContent = kindLabel(asset.type);
   badge.dataset.kind = asset.type || "unknown";
 
+  const inline = node.querySelector(".asset-card__inline-preview");
+  inline.replaceChildren();
+  const previewUrl = `/assets/${asset.id}/preview`;
+  // 只有有真实源文件时才挂媒体预览；手写素材仍在点击“预览”时显示正文。
+  if (asset.source_path && asset.type === "image") {
+    const image = document.createElement("img");
+    image.src = previewUrl; image.alt = asset.title; image.loading = "lazy";
+    image.addEventListener("click", () => previewAsset(asset).catch((err) => toast(err.message, true)));
+    inline.append(image);
+  } else if (asset.type === "video") {
+    const video = document.createElement("video");
+    video.src = previewUrl; video.controls = true; video.preload = "metadata";
+    video.addEventListener("dblclick", () => previewAsset(asset).catch((err) => toast(err.message, true)));
+    inline.append(video);
+  }
   node.querySelector(".asset-card__title").textContent = asset.title;
   node.querySelector(".asset-card__excerpt").textContent =
     excerpt(asset.content) || "（还没有正文）";
@@ -535,7 +554,7 @@ function renderGroups() {
     if(group && groupChildren(id).length) { const exp=document.createElement("button"); exp.className="tree-expander"; exp.textContent=state.expandedGroups.has(id)?"▾":"▸"; exp.setAttribute("aria-label","展开或收起 "+name); exp.onclick=()=>{state.expandedGroups.has(id)?state.expandedGroups.delete(id):state.expandedGroups.add(id);renderGroups();};li.append(exp); }
     const b=document.createElement("button"); b.className="tree-label"; b.textContent=name; b.onclick=()=>selectGroup(id);li.append(b);
     const count=document.createElement("span");count.className="tree-count";count.textContent=(state.project?.assets||[]).filter(a=>id==="all" || (id===null ? (a.project_group_id??a.group_id??null)===null : isInGroupSubtree(a.project_group_id??a.group_id??null,id))).length;li.append(count);
-    if(group){const edit=document.createElement("button");edit.className="tree-action";edit.textContent="⋯";edit.title="编辑分组";edit.onclick=()=>editGroup(group);const del=document.createElement("button");del.className="tree-action";del.textContent="×";del.title="删除分组";del.onclick=()=>deleteGroup(group);li.append(edit,del);}
+    if(group){const edit=document.createElement("button");edit.className="tree-action";edit.textContent="编辑";edit.title="编辑分组";edit.onclick=()=>editGroup(group);const del=document.createElement("button");del.className="tree-action";del.textContent="删除";del.title="删除分组";del.onclick=()=>deleteGroup(group);li.append(edit,del);}
     if(id!=="all"){
       li.addEventListener("dragover",e=>{if(e.dataTransfer.types.includes("text/asset-ids")){e.preventDefault();e.dataTransfer.dropEffect="move";li.classList.add("tree-row--drop");}});
       li.addEventListener("dragleave",()=>li.classList.remove("tree-row--drop"));
@@ -848,6 +867,68 @@ function openAssetModal(asset = null) {
   $("asset-title").focus();
 }
 
+let duplicatePending = null;
+
+function showDuplicateChoice(conflict, context) {
+  duplicatePending = { ...context, conflict };
+  const list = $("duplicate-candidates");
+  list.replaceChildren();
+  conflict.candidates.forEach((candidate, index) => {
+    const label = document.createElement("label");
+    label.className = "duplicate-candidate";
+    const radio = document.createElement("input");
+    radio.type = "radio"; radio.name = "duplicate-choice"; radio.value = String(candidate.asset_id);
+    radio.checked = index === 0;
+    const text = document.createElement("span");
+    const projects = (candidate.projects || []).map((project) => project.title).join("、") || "未归入项目";
+    text.textContent = `${candidate.title} · ${candidate.type || "未分类"} · ${projects} · 素材 #${candidate.asset_id}`;
+    label.append(radio, text); list.append(label);
+  });
+  $("duplicate-modal").showModal();
+}
+
+async function finishDuplicateChoice(action) {
+  if (!duplicatePending) return;
+  const pending = duplicatePending;
+  const selected = document.querySelector('input[name="duplicate-choice"]:checked');
+  const payload = {
+    temp_id: pending.conflict.temp_id,
+    action,
+    title: pending.title,
+    tags: pending.tags ? pending.tags.split(",").filter(Boolean) : [],
+    notes: pending.notes,
+    project_id: pending.projectId,
+    group_id: pending.groupId,
+    existing_asset_id: action === "reuse_existing" && selected ? Number(selected.value) : null,
+  };
+  const buttons = [$("duplicate-cancel"), $("duplicate-new"), $("duplicate-reuse")];
+  buttons.forEach((button) => { button.disabled = true; });
+  try {
+    await api("/assets/upload/confirm", { method: "POST", body: JSON.stringify(payload) });
+    $("duplicate-modal").close();
+    duplicatePending = null;
+    if (action === "cancel") {
+      toast("已取消，没有新增素材");
+    } else {
+      toast(action === "reuse_existing" ? "已复用已有素材" : "已创建独立素材");
+      await Promise.all([loadProjects(), refreshDetail()]);
+    }
+    if (!$("asset-modal").open) return;
+    const { button, done, total } = pending;
+    $("asset-modal").close();
+    button.textContent = "保存";
+    button.disabled = false;
+    duplicatePending = null;
+    if (done + 1 < total) toast(`已处理当前重复文件；其余 ${total - done - 1} 个文件未上传，请重新选择后继续`);
+    state.files = [];
+    await Promise.all([loadProjects(), refreshDetail()]);
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+}
+
 async function submitAsset(event) {
   event.preventDefault();
   const title = $("asset-title").value.trim();
@@ -943,6 +1024,19 @@ async function submitAsset(event) {
           await api("/assets/upload", { method: "POST", body: form });
           done += 1;
         } catch (err) {
+          if (err.status === 409 && err.data?.kind === "duplicate_asset") {
+            showDuplicateChoice(err.data, {
+              title: state.files.length === 1 ? title : stemOf(file.name),
+              tags,
+              notes,
+              projectId: state.project.id,
+              groupId: typeof state.currentGroup === "number" ? state.currentGroup : null,
+              button,
+              done,
+              total: state.files.length,
+            });
+            return;
+          }
           // 前几件已经进库了，不能装作整体失败
           throw new Error(`已上传 ${done} 件，第 ${done + 1} 件失败：${err.message}`);
         }
@@ -1261,6 +1355,9 @@ function wire() {
   $("project-form").addEventListener("submit", submitProject);
   $("btn-project-cancel").addEventListener("click", () => $("project-modal").close());
   $("asset-form").addEventListener("submit", submitAsset);
+  $("duplicate-cancel").addEventListener("click", () => finishDuplicateChoice("cancel"));
+  $("duplicate-new").addEventListener("click", () => finishDuplicateChoice("create_new"));
+  $("duplicate-reuse").addEventListener("click", () => finishDuplicateChoice("reuse_existing"));
   $("btn-asset-cancel").addEventListener("click", () => {
     state.editing = null;
     state.replaceFile = null;

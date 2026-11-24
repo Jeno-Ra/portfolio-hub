@@ -24,6 +24,9 @@ class Base(DeclarativeBase):
 
 
 # 多对多：素材 <--> 项目（同一份素材可以挂在多个项目下，比如两张项目共用的图）
+#
+# 为什么用中间表而不是在 assets 里放 project_id？
+# 因为同一份素材可以复用到多个项目；如果只放一个 project_id，复用就只能复制文件。
 project_assets = Table(
     "project_assets",
     Base.metadata,
@@ -48,6 +51,16 @@ project_tags = Table(
 )
 
 class AssetGroup(Base):
+    """项目内的分组树节点。
+
+    这是自引用表：parent_id 指向同一张表的另一个 id，因此可以表达任意深度：
+
+        角色素材（parent_id=NULL）
+        └── 蒙恬（parent_id=角色素材.id）
+
+    同一个项目、同一个父分组下不能出现同名节点；但不同父分组可以各有一个同名子组。
+    """
+
     __tablename__ = "asset_groups"
     __table_args__ = (UniqueConstraint("project_id", "parent_id", "name"),)
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -58,6 +71,10 @@ class AssetGroup(Base):
     parent: Mapped["AssetGroup | None"] = relationship(remote_side=[id], back_populates="children")
     children: Mapped[list["AssetGroup"]] = relationship(back_populates="parent")
 
+# 项目内的“素材分组关系”。
+# project_assets 只回答“素材属于哪些项目”；这个表再回答“它在该项目哪个组”。
+# group_id 允许 NULL：NULL 就是“待归类”，比硬塞进一个“根目录”虚拟组更简单。
+# (project_id, asset_id) 唯一：一件素材在同一个项目里只能有一个归属组。
 project_asset_groups = Table(
     "project_asset_groups", Base.metadata,
     Column("project_id", ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True),
@@ -68,7 +85,16 @@ project_asset_groups = Table(
 
 
 class Project(Base):
-    """项目：一个作品的"总集"。标题、简介、封面，下面挂任意多个素材。"""
+    """项目：一个作品的"总集"。
+
+    项目只负责组织，不负责保存具体文件内容：
+    - title/summary/cover_path 是项目自己的信息
+    - assets 是多对多素材关系
+    - groups 是当前项目自己的分组树
+
+    因此删除项目默认只删除这个容器，不应顺手删掉素材；
+    同一个素材可能还被其他项目引用。
+    """
 
     __tablename__ = "projects"
 
@@ -86,6 +112,7 @@ class Project(Base):
         back_populates="projects",
         order_by="Asset.id",
     )
+    # 删除项目时级联删除项目自己的分组和关系记录；不会因为这个关系自动删除 Asset。
     groups: Mapped[list["AssetGroup"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     tags: Mapped[list["Tag"]] = relationship(
         secondary=project_tags,
@@ -96,7 +123,11 @@ class Project(Base):
 class Asset(Base):
     """素材：图片 / 视频 / 音频 / 文本 / 代码 / 文档中的一条。
 
+    Asset 是系统里真正的内容实体：项目只是引用它。
+    同一个 Asset 可以挂到多个 Project，这也是项目/素材拆开建模的核心原因。
+
     type 是内置分类（见 kinds.py），不是用户自定义标签；索引、解析、筛选都按它走。
+    content 是供检索的正文/描述，source_path 只是溯源地址，不代表 AI 有权修改那个原文件。
     """
 
     __tablename__ = "assets"
@@ -107,6 +138,8 @@ class Asset(Base):
     content: Mapped[str] = mapped_column(Text, default="")
     # 原始文件路径（上传副本或服务器上的原文件），用于溯源
     source_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # 文件内容 SHA-256：用于上传重复检测；手写/路径录入可以为空。
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     chunks: Mapped[list["Chunk"]] = relationship(
@@ -124,7 +157,11 @@ class Asset(Base):
 
 
 class Chunk(Base):
-    """切片表：素材正文按块切开后逐块做向量化"""
+    """素材正文的一个检索片段。
+
+    原文 500 字一块、相邻块重叠 50 字；同一个素材的 chunk_index 从 0 开始递增。
+    PostgreSQL 保存它，Chroma 保存同一片段的向量；两边用 asset_id + chunk_index 对齐。
+    """
 
     __tablename__ = "chunks"
     __table_args__ = (UniqueConstraint("asset_id", "chunk_index"),)
@@ -158,7 +195,11 @@ class Tag(Base):
 
 
 class Conversation(Base):
-    """对话表：一次完整的问答会话"""
+    """一组问答的容器。
+
+    当前问答检索主要依赖当前请求与 LAST_HITS；Conversation/Message 负责记录历史，
+    后续如果要支持多轮指代，可以把上下文或 last_sources 挂到这里。
+    """
 
     __tablename__ = "conversations"
 

@@ -105,7 +105,11 @@ def _refusal_answer(db: Session, question: str) -> str:
 
 
 def _retrieve(question: str) -> list[dict]:
-    """检索并按距离过滤。top-k 永远会凑满 k 条，不过滤会把无关素材也算进引用。"""
+    """问题向量化 → Chroma top-k → 距离过滤。
+
+    top-k 只表示“最接近的候选”，不代表一定相关；所以必须再过 MAX_DISTANCE。
+    否则用户问天气时，系统也会硬塞 5 件最不相关的素材给模型，增加幻觉风险。
+    """
     hits = vector_store.query(embedding.embed_text(question), top_k=RETRIEVAL_TOP_K)
     return [hit for hit in hits if hit["distance"] <= MAX_DISTANCE]
 

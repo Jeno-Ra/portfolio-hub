@@ -1,7 +1,7 @@
 from collections.abc import Iterator
 from pathlib import Path
 
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.config import settings
@@ -55,7 +55,19 @@ def init_db() -> None:
     并为旧项目素材关联补根目录记录；未来列变更需要显式迁移，禁止重建用户库。
     """
     Base.metadata.create_all(bind=engine)
-    # 增量迁移：为既有项目-素材关联补充分组表根节点记录；不删除旧数据
+    # 增量迁移：旧库新增可空哈希列；不重建表、不改已有行。
+    columns = {column["name"] for column in inspect(engine).get_columns("assets")}
+    with engine.begin() as conn:
+        if "content_hash" not in columns:
+            conn.execute(text("ALTER TABLE assets ADD COLUMN content_hash VARCHAR(64)"))
+        if _is_sqlite:
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_assets_content_hash ON assets (content_hash)"))
+        else:
+            indexes = {index["name"] for index in inspect(engine).get_indexes("assets")}
+            if "ix_assets_content_hash" not in indexes:
+                conn.execute(text("CREATE INDEX ix_assets_content_hash ON assets (content_hash)"))
+
+    # 增量迁移：为既有项目-素材关联补充分组表根节点记录，不删除旧数据。
     with engine.begin() as conn:
         if _is_sqlite:
             conn.execute(text("""

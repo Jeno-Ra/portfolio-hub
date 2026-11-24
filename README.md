@@ -9,6 +9,7 @@
 - 树形分组导航：全部素材、待归类、子分组、类型筛选。
 - 多选批量移动和拖拽归类。
 - 素材可编辑，也可以替换源文件；替换后自动重新解析和建立索引。
+- 图片和视频在素材卡片中直接显示缩略图/播放器；点击图片或预览按钮可放大，其他格式使用预览窗口。
 - 图片、视频、音频、PDF、文本和代码预览。
 - 基于 Chroma 的语义检索与 DeepSeek 问答，支持 SSE 流式输出。
 - Docker 正式版、Windows 桌面客户端、手机端远程访问。
@@ -76,6 +77,27 @@ Docker 数据使用命名卷保存：
 - appdata：上传媒体文件
 
 备份前先停止写入服务，再执行 `scripts/backup.ps1`。备份应同时保留数据库导出和媒体文件，并核对清单哈希。不要把 `.env`、数据库、上传文件或真实作品提交到 Git。
+
+## 代码阅读顺序
+
+如果要快速理解项目、准备面试，按这个顺序看，不要从全部文件开始：
+
+1. `backend/app/models.py`：项目、素材、分组、切片、标签的数据库关系。
+2. `backend/app/kinds.py`：六种内置素材类型以及类型如何决定解析方式。
+3. `backend/app/assets_api.py` + `uploads.py`：拖拽上传、类型判断、文件副本和预览。
+4. `backend/app/indexer.py` + `chunking.py`：正文如何切片、向量化、写入 PostgreSQL/Chroma。
+5. `backend/app/qa_api.py` + `router.py`：意图判断、检索、管理动作和目录上下文。
+6. `backend/app/embedding.py` + `vector_store.py` + `llm.py`：向量、距离阈值、模型回答和 SSE。
+7. `backend/app/policy.py` + `response.py` + `logging_setup.py`：权限边界、统一响应、请求追踪。
+8. `docker-compose.yml` + `infra/Dockerfile` + `infra/nginx/default.conf`：服务编排、镜像和反向代理。
+
+面试时要能讲清三条主线：
+
+```text
+项目/素材模型
+上传文件 → 判类型 → 解析 → 切片 → 向量 → PostgreSQL + Chroma
+提问 → 意图 → embedding → top-k → 距离过滤 → LLM + 引用
+```
 
 ## 数据模型
 
